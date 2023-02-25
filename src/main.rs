@@ -1,4 +1,4 @@
-use RC::{get_diffie_hellman_params, get_shared_secret_key};
+use rc::{get_diffie_hellman_params, get_shared_secret_key};
 
 fn main() {
     let alice_dh = get_diffie_hellman_params();
