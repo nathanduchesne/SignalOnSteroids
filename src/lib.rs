@@ -57,8 +57,6 @@ pub fn kdf_ck(ck: &ChainKey) -> (ChainKey, MessageKey) {
     .expect("HMAC can take key of any size");
     mac_msg.update(b"01");
 
-    // `result` has type `CtOutput` which is a thin wrapper around array of
-    // bytes for providing constant time equality check
     let result_msg: [u8; 32] = mac_msg.finalize().into_bytes().as_slice().try_into().expect("Length should be 32 bytes.");
 
     let mut mac_chain = HmacSha256::new_from_slice(ck)
@@ -69,7 +67,6 @@ pub fn kdf_ck(ck: &ChainKey) -> (ChainKey, MessageKey) {
 }
 
 type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
-
 pub fn encrypt(mk: &MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec<u8> {
     let ikm = mk;
     let salt: [u8; 32] = [0; 32];
@@ -156,6 +153,29 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
     return Ok(plaintext.to_vec());
 }
 
+pub struct Header {
+    pub dh_ratchet_key: PublicKey, 
+    pub rev_chain_len: usize,
+    pub msg_nbr: usize
+}
+
+/// Syntactic sugar to match the Signal Double Ratchet Algorithm API
+pub fn header(dh_pair: PublicKey, pn: usize, n: usize) -> Header {
+    Header { dh_ratchet_key: dh_pair, rev_chain_len: pn, msg_nbr: n }
+}
+
+pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
+    let len_ad = ad.len();
+    let mut result: Vec<u8> = Vec::new();
+    result.extend_from_slice(&len_ad.to_be_bytes());
+    result.extend_from_slice(ad);
+
+    result.extend_from_slice(header.dh_ratchet_key.as_bytes());
+    result.extend_from_slice(&header.rev_chain_len.to_be_bytes());
+    result.extend_from_slice(&header.msg_nbr.to_be_bytes());
+    return result;
+}
+
 
 
 
@@ -197,6 +217,27 @@ mod tests {
         let decrypted_ciphertext = decrypt(&key, &ciphertext, &associated_data);
 
         assert_eq!(decrypted_ciphertext.unwrap(), plaintext);
+    }
+
+    #[test]
+    /// https://github.com/pyca/cryptography/blob/main/vectors/cryptography_vectors/KDF/rfc-5869-HKDF-SHA256.txt
+    fn kdf_rk_works() {
+        let ikm = hex!("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f");
+        let salt = hex!("606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf");
+        let info = hex!("b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff"); // 'sOsforEPFL'
+    
+        let hk = Hkdf::<Sha256>::new(Some(&salt[..]), &ikm);
+        let mut okm = [0u8; 82];
+        hk.expand(&info, &mut okm)
+            .expect("82 is a valid length for Sha256 to output");
+        let mut root_key = [0u8; 32];
+        root_key.clone_from_slice(&okm[0..32]);
+        let mut chain_key = [0u8; 32];
+        chain_key.clone_from_slice(&okm[32..64]);
+        let root_key_verif = hex!("b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c");
+        assert_eq!(root_key, root_key_verif);
+        let chain_key_verif = hex!("59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71");
+        assert_eq!(chain_key, chain_key_verif);
     }
 
     #[test]
