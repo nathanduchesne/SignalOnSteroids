@@ -1,7 +1,7 @@
-use std::{io::Chain, collections::HashMap};
+use std::{collections::HashMap};
 
 use rand_core::OsRng;
-use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
+use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use hex_literal::hex;
 use sha2::Sha256;
 use hkdf::Hkdf;
@@ -9,14 +9,14 @@ use hmac::{Hmac, Mac};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 
 
-const BLOCK_SIZE: usize = 48;
 const MAX_SKIP: usize = 100;
 
 pub use cipher;
 
 /// Using the curve25519-dalek generator.
+#[derive(Clone)]
 pub struct DiffieHellmanParameters {
-    pub secret: EphemeralSecret,
+    pub secret: StaticSecret,
     pub public: PublicKey
 }
 
@@ -24,12 +24,8 @@ pub fn dh(user_dh_params: DiffieHellmanParameters, other_user_public: PublicKey)
     return user_dh_params.secret.diffie_hellman(&other_user_public);
 }
 
-pub fn dh_using_secret(user_dh_secret: EphemeralSecret, other_user_public: PublicKey) -> SharedSecret {
-    return user_dh_secret.diffie_hellman(&other_user_public);
-}
-
 pub fn generate_dh() -> DiffieHellmanParameters {
-    let user_secret = EphemeralSecret::new(OsRng);
+    let user_secret = StaticSecret::new(OsRng);
     let user_public = PublicKey::from(&user_secret);
     DiffieHellmanParameters { secret: user_secret, public: user_public}
 }
@@ -162,13 +158,13 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
 
 pub struct Header {
     pub dh_ratchet_key: PublicKey, 
-    pub rev_chain_len: usize,
+    pub prev_chain_len: usize,
     pub msg_nbr: usize
 }
 
 /// Syntactic sugar to match the Signal Double Ratchet Algorithm API
 pub fn header(dh_pair: PublicKey, pn: usize, n: usize) -> Header {
-    Header { dh_ratchet_key: dh_pair, rev_chain_len: pn, msg_nbr: n }
+    Header { dh_ratchet_key: dh_pair, prev_chain_len: pn, msg_nbr: n }
 }
 
 pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
@@ -178,13 +174,14 @@ pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
     result.extend_from_slice(ad);
 
     result.extend_from_slice(header.dh_ratchet_key.as_bytes());
-    result.extend_from_slice(&header.rev_chain_len.to_be_bytes());
+    result.extend_from_slice(&header.prev_chain_len.to_be_bytes());
     result.extend_from_slice(&header.msg_nbr.to_be_bytes());
     return result;
 }
 
+#[allow(non_snake_case)]
 pub struct State {
-    pub DHs: PublicKey,
+    pub DHs: DiffieHellmanParameters,
     pub DHr: PublicKey,
     pub RK: RootKey,
     pub CKs: ChainKey,
@@ -193,16 +190,15 @@ pub struct State {
     pub Nr: usize,
     pub PN: usize,
     pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>,
-    pub has_done_first_exchange: bool,
-    pub bob_first_sk: EphemeralSecret,
     pub state_CKr_is_none: bool
 }
 
+#[allow(non_snake_case)]
 pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> State {
     let dh_pair = generate_dh();
-    let (root_key, chain_key) = kdf_rk(SK.as_bytes(), dh_using_secret(dh_pair.secret, *bob_dh_public_key));
+    let (root_key, chain_key) = kdf_rk(SK.as_bytes(), dh(dh_pair.clone(), *bob_dh_public_key));
     State { 
-         DHs: dh_pair.public.clone(),
+         DHs: dh_pair,
          DHr: bob_dh_public_key.clone(), 
          RK: root_key, 
          CKs: chain_key, 
@@ -211,15 +207,14 @@ pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> S
          Nr: 0, 
          PN: 0, 
          MKSKIPPED: HashMap::new(), 
-         has_done_first_exchange: true, 
-         bob_first_sk: EphemeralSecret::new(OsRng),
          state_CKr_is_none: true }
 }
 
+#[allow(non_snake_case)]
 pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParameters) -> State {
     let filling_value = generate_dh().public;
     State { 
-         DHs: bob_dh_key_pair.public,
+         DHs: bob_dh_key_pair,
          DHr: filling_value, 
          RK: SK.to_bytes(), 
          CKs: [0; 32], 
@@ -227,25 +222,19 @@ pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParamet
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
-         MKSKIPPED: HashMap::new(), 
-         has_done_first_exchange: false, 
-         bob_first_sk: bob_dh_key_pair.secret,
+         MKSKIPPED: HashMap::new(),
          state_CKr_is_none: true }
 }
 
-pub struct Message {
-    header: Header,
-    ciphertext: Vec<u8>
-}
 
-pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u8]) -> Message {
+pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u8]) -> (Header, Vec<u8>) {
     let mk: MessageKey;
     (state.CKs, mk) = kdf_ck(&state.CKs);
-    let header = header(state.DHs, state.PN, state.Ns);
+    let header = header(state.DHs.public, state.PN, state.Ns);
     state.Ns += 1;
-    return Message{header: header, ciphertext: encrypt(&mk, plaintext, associated_data)};
+    return (header, encrypt(&mk, plaintext, associated_data));
 }
-pub fn try_skipped_message_keys(state: &mut State, header: Header, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
+pub fn try_skipped_message_keys(state: &mut State, header: &Header, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
     if state.MKSKIPPED.contains_key(&(header.dh_ratchet_key, header.msg_nbr)) {
         let mk = state.MKSKIPPED.remove(&(header.dh_ratchet_key, header.msg_nbr)).unwrap();
         //TODO: case match on Err or Result
@@ -256,10 +245,11 @@ pub fn try_skipped_message_keys(state: &mut State, header: Header, ciphertext: &
     }
 }
 
-pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'static str> {
+pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'static str>{
     if state.Nr + MAX_SKIP < until {
         return Err("No such message exists.");
     }
+    //TODO: Make sure this is done w/o a boolean flag and use memcmp instead.
     if !state.state_CKr_is_none {
         while state.Nr < until {
             let mk: MessageKey;
@@ -267,8 +257,8 @@ pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'sta
             state.MKSKIPPED.insert((state.DHr, state.Nr), mk);
             state.Nr += 1;
         }
-        return Ok(1);
     }
+    return Ok(1);
 }
 
 pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
@@ -276,15 +266,44 @@ pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
     state.Ns = 0;
     state.Nr = 0;
     state.DHr = header.dh_ratchet_key;
-    (state.RK, state.CKr) = kdf_rk(&state.RK, dh)
+    (state.RK, state.CKr) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
+    // TODO: Clean memory from any secret keys
+    state.DHs = generate_dh();
+    (state.RK, state.CKs) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
+
 }
 
-state.DHr = header.dh
-state.RK, state.CKr = KDF_RK(state.RK, DH(state.DHs, state.DHr))
-state.DHs = GENERATE_DH()
-state.RK, state.CKs = KDF_RK(state.RK, DH(state.DHs, state.DHr))
 
-//pub fn ratchet_decrypt()
+pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    let plaintext = try_skipped_message_keys(state, &header, ciphertext, associated_data);
+    match plaintext {
+        Ok(_) => return plaintext,
+        Err("HMAC does not match, authentication failed.") => return Err("Integrity checks failed."),
+        _ => {
+            if header.dh_ratchet_key != state.DHr {
+                match skip_message_keys(state, header.prev_chain_len) {
+                    Err(_) => return Err("No such message exists."),
+                    Ok(_) => {
+                        dh_ratchet(state, &header);
+                    }
+                }
+            }
+            else {
+                match skip_message_keys(state, header.msg_nbr) {
+                    Err(_) => return Err("No such message exists."),
+                    Ok(_) => {
+                        let mk: MessageKey;
+                        (state.CKr, mk) = kdf_ck(&state.CKr);
+                        state.Nr += 1;
+                        return decrypt(&mk, ciphertext, associated_data);
+                    }
+                }
+            }
+        },
+
+    }
+    return Ok(Vec::new());
+}
 
 
 
@@ -387,7 +406,7 @@ mod tests {
         let bob_state = ratchet_init_bob(&shared_secret, bob_dh);
 
         // Test if we can still use bob_dh.secret after putting it in struct
-        let test = dh_using_secret(bob_state.bob_first_sk, alice_shared_params.public);
+        let test = dh(bob_state.DHs, alice_shared_params.public);
     }
 
     #[test]
