@@ -1,3 +1,5 @@
+use std::{io::Chain, collections::HashMap};
+
 use rand_core::OsRng;
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret};
 use hex_literal::hex;
@@ -19,6 +21,10 @@ pub struct DiffieHellmanParameters {
 
 pub fn dh(user_dh_params: DiffieHellmanParameters, other_user_public: PublicKey) -> SharedSecret {
     return user_dh_params.secret.diffie_hellman(&other_user_public);
+}
+
+pub fn dh_using_secret(user_dh_secret: EphemeralSecret, other_user_public: PublicKey) -> SharedSecret {
+    return user_dh_secret.diffie_hellman(&other_user_public);
 }
 
 pub fn generate_dh() -> DiffieHellmanParameters {
@@ -176,6 +182,70 @@ pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
     return result;
 }
 
+pub struct State {
+    pub DHs: PublicKey,
+    pub DHr: PublicKey,
+    pub RK: RootKey,
+    pub CKs: ChainKey,
+    pub CKr: ChainKey,
+    pub Ns: usize,
+    pub Nr: usize,
+    pub PN: usize,
+    pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>,
+    pub has_done_first_exchange: bool,
+    pub bob_first_sk: EphemeralSecret,
+    pub state_CKr_is_none: bool
+}
+
+pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> State {
+    let dh_pair = generate_dh();
+    let (root_key, chain_key) = kdf_rk(SK.as_bytes(), dh_using_secret(dh_pair.secret, *bob_dh_public_key));
+    State { 
+         DHs: dh_pair.public.clone(),
+         DHr: bob_dh_public_key.clone(), 
+         RK: root_key, 
+         CKs: chain_key, 
+         CKr: [0; 32], 
+         Ns: 0, 
+         Nr: 0, 
+         PN: 0, 
+         MKSKIPPED: HashMap::new(), 
+         has_done_first_exchange: true, 
+         bob_first_sk: EphemeralSecret::new(OsRng),
+         state_CKr_is_none: true }
+}
+
+pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParameters) -> State {
+    let filling_value = generate_dh().public;
+    State { 
+         DHs: bob_dh_key_pair.public,
+         DHr: filling_value, 
+         RK: SK.to_bytes(), 
+         CKs: [0; 32], 
+         CKr: [0; 32], 
+         Ns: 0, 
+         Nr: 0, 
+         PN: 0, 
+         MKSKIPPED: HashMap::new(), 
+         has_done_first_exchange: false, 
+         bob_first_sk: bob_dh_key_pair.secret,
+         state_CKr_is_none: true }
+}
+
+pub struct Message {
+    header: Header,
+    ciphertext: Vec<u8>
+}
+
+pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u8]) -> Message {
+    let mk: MessageKey;
+    (state.CKs, mk) = kdf_ck(&state.CKs);
+    let header = header(state.DHs, state.PN, state.Ns);
+    state.Ns += 1;
+    return Message{header: header, ciphertext: encrypt(&mk, plaintext, associated_data)};
+}
+
+
 
 
 
@@ -265,6 +335,18 @@ mod tests {
         let decrypted_ciphertext = decrypt(&key, &ciphertext, &associated_data);
 
         assert_eq!(decrypted_ciphertext, Err("HMAC does not match, authentication failed."));
+    }
+
+    #[test]
+    fn bob_sk_scope_works() {
+        let bob_shared_params = generate_dh();
+        let alice_shared_params = generate_dh();
+        let shared_secret = dh(bob_shared_params, alice_shared_params.public);
+        let bob_dh = generate_dh();
+        let bob_state = ratchet_init_bob(&shared_secret, bob_dh);
+
+        // Test if we can still use bob_dh.secret after putting it in struct
+        let test = dh_using_secret(bob_state.bob_first_sk, alice_shared_params.public);
     }
 
     #[test]
