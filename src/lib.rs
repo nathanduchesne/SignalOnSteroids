@@ -91,12 +91,8 @@ pub fn encrypt(mk: &MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec
 
     //let ciphertext = Aes256CbcEnc::new(&encryption_key.into(), &iv.into()).encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
     //let ciphertext: [u8; 32] = [0; 32];
-    let mut buf = [0u8; 48];
-    let pt_len = plaintext.len();
-    buf[..pt_len].copy_from_slice(&plaintext);
     let ciphertext = Aes256CbcEnc::new(&encryption_key.into(), &iv.into())
-        .encrypt_padded_mut::<Pkcs7>(&mut buf, pt_len)
-        .unwrap();
+    .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
     
 
     // HMAC is calculated using the authentication key and the same hash function as above [2]. The HMAC input is the associated_data prepended to the ciphertext. 
@@ -150,7 +146,7 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
 
     let mut ciphertext_without_hmac = ciphertext[..ciphertext.len() - 32].to_vec();
     let plaintext = Aes256CbcDec::new(&decryption_key.into(), &iv.into())
-    .decrypt_padded_mut::<Pkcs7>(&mut ciphertext_without_hmac)
+    .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext_without_hmac)
     .unwrap();
 
     return Ok(plaintext.to_vec());
@@ -189,8 +185,7 @@ pub struct State {
     pub Ns: usize,
     pub Nr: usize,
     pub PN: usize,
-    pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>,
-    pub state_CKr_is_none: bool
+    pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>
 }
 
 #[allow(non_snake_case)]
@@ -206,8 +201,8 @@ pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> S
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
-         MKSKIPPED: HashMap::new(), 
-         state_CKr_is_none: true }
+         MKSKIPPED: HashMap::new()
+        }
 }
 
 #[allow(non_snake_case)]
@@ -222,8 +217,8 @@ pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParamet
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
-         MKSKIPPED: HashMap::new(),
-         state_CKr_is_none: true }
+         MKSKIPPED: HashMap::new()
+        }
 }
 
 
@@ -237,7 +232,6 @@ pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u
 pub fn try_skipped_message_keys(state: &mut State, header: &Header, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
     if state.MKSKIPPED.contains_key(&(header.dh_ratchet_key, header.msg_nbr)) {
         let mk = state.MKSKIPPED.remove(&(header.dh_ratchet_key, header.msg_nbr)).unwrap();
-        //TODO: case match on Err or Result
         return decrypt(&mk, ciphertext, associated_data);
     }
     else {
@@ -250,7 +244,7 @@ pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'sta
         return Err("No such message exists.");
     }
     //TODO: Make sure this is done w/o a boolean flag and use memcmp instead.
-    if !state.state_CKr_is_none {
+    if state.CKr != [0;32] {
         while state.Nr < until {
             let mk: MessageKey;
             (state.CKr, mk) = kdf_ck(&state.CKr);
@@ -285,6 +279,16 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
                     Err(_) => return Err("No such message exists."),
                     Ok(_) => {
                         dh_ratchet(state, &header);
+                        match skip_message_keys(state, header.msg_nbr) {
+                            Err(_) => return Err("No such message exists."),
+                            Ok(_) => {
+                                let mk: MessageKey;
+                                (state.CKr, mk) = kdf_ck(&state.CKr);
+                                state.Nr += 1;
+                                return decrypt(&mk, ciphertext, associated_data);
+                            }
+                        }
+                        
                     }
                 }
             }
@@ -302,7 +306,6 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
         },
 
     }
-    return Ok(Vec::new());
 }
 
 
@@ -396,18 +399,102 @@ mod tests {
 
         assert_eq!(decrypted_ciphertext, Err("HMAC does not match, authentication failed."));
     }
+    //TODO: 
+    // 2) test that when HMAC check fails
+    // 3) test that when ratchet PK changes, we can decyrpt previous skipped msgs
 
     #[test]
-    fn bob_sk_scope_works() {
-        let bob_shared_params = generate_dh();
-        let alice_shared_params = generate_dh();
-        let shared_secret = dh(bob_shared_params, alice_shared_params.public);
-        let bob_dh = generate_dh();
-        let bob_state = ratchet_init_bob(&shared_secret, bob_dh);
+    fn ratchet_works_when_alice_sends_multiple_messages_with_no_response_from_bob() {
+        let alice_shared_secret_params = generate_dh();
+        let bob_shared_secret_params = generate_dh();
+        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
 
-        // Test if we can still use bob_dh.secret after putting it in struct
-        let test = dh(bob_state.DHs, alice_shared_params.public);
+        let bob_ratchet_dh_params = generate_dh();
+        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
+        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+
+        let alice_plaintext = *b"Hello Bob! I am Alice.";
+        let mut associated_data: [u8; 44] = [17; 44];
+        let alice_first_message_sent = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
+
+        let bob_first_message_received = ratchet_decrypt(&mut bob_state, alice_first_message_sent.0, &alice_first_message_sent.1, &associated_data);
+        assert_eq!(bob_first_message_received.unwrap(), alice_plaintext);
+
+        let alice_second_plaintext = *b"Can you understand me?";
+        associated_data = [21; 44];
+        let alice_second_message_sent = ratchet_encrypt(&mut alice_state, &alice_second_plaintext, &associated_data);
+
+        let bob_second_message_received = ratchet_decrypt(&mut bob_state, alice_second_message_sent.0, &alice_second_message_sent.1, &associated_data);
+        assert_eq!(bob_second_message_received.unwrap(), alice_second_plaintext);
     }
+
+    #[test]
+    fn ratchet_works_when_both_parties_communicate_no_reordering() {
+        let alice_shared_secret_params = generate_dh();
+        let bob_shared_secret_params = generate_dh();
+        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
+
+        let bob_ratchet_dh_params = generate_dh();
+        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
+        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+
+        let alice_plaintext = *b"Hello Bob! I am Alice.";
+        let mut associated_data: [u8; 44] = [17; 44];
+        let alice_first_message_sent = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
+
+        let bob_first_message_received = ratchet_decrypt(&mut bob_state, alice_first_message_sent.0, &alice_first_message_sent.1, &associated_data);
+        assert_eq!(bob_first_message_received.unwrap(), alice_plaintext);
+
+        associated_data = [100; 44];
+        let bob_plaintext = *b"Hello Alice, I am Bob and hear you!";
+        let bob_first_message_sent = ratchet_encrypt(&mut bob_state, &bob_plaintext, &associated_data);
+
+        let alice_first_message_received = ratchet_decrypt(&mut alice_state, bob_first_message_sent.0, &bob_first_message_sent.1, &associated_data);
+        assert_eq!(alice_first_message_received.unwrap(), bob_plaintext);
+
+        let a2 = *b"Cool!";
+        let a3 = *b"How are you?";
+        let c_a2 = ratchet_encrypt(&mut alice_state, &a2, &associated_data);
+        let c_a3 = ratchet_encrypt(&mut alice_state, &a3, &associated_data);
+
+        assert_eq!(ratchet_decrypt(&mut bob_state, c_a2.0, &c_a2.1, &associated_data).unwrap(), a2);
+        assert_eq!(ratchet_decrypt(&mut bob_state, c_a3.0, &c_a3.1, &associated_data).unwrap(), a3);
+
+        let b2 = *b"Looking good";
+        let c_b2 = ratchet_encrypt(&mut bob_state, &b2, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut alice_state, c_b2.0, &c_b2.1, &associated_data).unwrap(), b2);
+
+    }
+
+    #[test]
+    fn ratchet_works_with_reordering() {
+        let alice_shared_secret_params = generate_dh();
+        let bob_shared_secret_params = generate_dh();
+        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
+
+        let bob_ratchet_dh_params = generate_dh();
+        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
+        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+
+        let alice_plaintext = *b"Hello Bob! I am Alice.";
+        let associated_data: [u8; 44] = [17; 44];
+        let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
+        let a2 = *b"You hear me?";
+        let c_a2 = ratchet_encrypt(&mut alice_state, &a2, &associated_data);
+
+        assert_eq!(ratchet_decrypt(&mut bob_state, c_a2.0, &c_a2.1, &associated_data).unwrap(), a2);
+        
+        let b1 = *b"I hear you but haven't gotten your first message yet";
+        let c_b1 = ratchet_encrypt(&mut bob_state, &b1, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut alice_state, c_b1.0, &c_b1.1, &associated_data).unwrap(), b1);
+
+        let a3 = *b"The postman is stuck in traffic :)";
+        let c_a3 = ratchet_encrypt(&mut alice_state, &a3, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut bob_state, c_a3.0, &c_a3.1, &associated_data).unwrap(), a3);
+
+        assert_eq!(ratchet_decrypt(&mut bob_state, c_a1.0, &c_a1.1, &associated_data).unwrap(), alice_plaintext);
+    }
+
 
     #[test]
     fn it_works() {
