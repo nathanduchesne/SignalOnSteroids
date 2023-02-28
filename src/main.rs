@@ -25,4 +25,5 @@ fn main() {
         .expect("42 is a valid length for Sha256 to output");
 
     println!("{:?}", okm);
+
 }

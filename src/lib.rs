@@ -10,6 +10,7 @@ use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvI
 
 
 const BLOCK_SIZE: usize = 48;
+const MAX_SKIP: usize = 100;
 
 pub use cipher;
 
@@ -244,6 +245,46 @@ pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u
     state.Ns += 1;
     return Message{header: header, ciphertext: encrypt(&mk, plaintext, associated_data)};
 }
+pub fn try_skipped_message_keys(state: &mut State, header: Header, ciphertext: &[u8], associated_data: &[u8]) -> Result<Vec<u8>, &'static str> {
+    if state.MKSKIPPED.contains_key(&(header.dh_ratchet_key, header.msg_nbr)) {
+        let mk = state.MKSKIPPED.remove(&(header.dh_ratchet_key, header.msg_nbr)).unwrap();
+        //TODO: case match on Err or Result
+        return decrypt(&mk, ciphertext, associated_data);
+    }
+    else {
+        return Err("Not in skipped messages.");
+    }
+}
+
+pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'static str> {
+    if state.Nr + MAX_SKIP < until {
+        return Err("No such message exists.");
+    }
+    if !state.state_CKr_is_none {
+        while state.Nr < until {
+            let mk: MessageKey;
+            (state.CKr, mk) = kdf_ck(&state.CKr);
+            state.MKSKIPPED.insert((state.DHr, state.Nr), mk);
+            state.Nr += 1;
+        }
+        return Ok(1);
+    }
+}
+
+pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
+    state.PN = state.Ns;
+    state.Ns = 0;
+    state.Nr = 0;
+    state.DHr = header.dh_ratchet_key;
+    (state.RK, state.CKr) = kdf_rk(&state.RK, dh)
+}
+
+state.DHr = header.dh
+state.RK, state.CKr = KDF_RK(state.RK, DH(state.DHs, state.DHr))
+state.DHs = GENERATE_DH()
+state.RK, state.CKs = KDF_RK(state.RK, DH(state.DHs, state.DHr))
+
+//pub fn ratchet_decrypt()
 
 
 
