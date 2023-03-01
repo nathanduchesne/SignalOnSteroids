@@ -17,3 +17,4 @@ cbc = { version = "0.1.2", features = ["alloc"] }
 cipher = "0.4.2"
 block-padding = "0.3.2"
 ccm = "0.5.0"
+zeroize = "1.5.7"
