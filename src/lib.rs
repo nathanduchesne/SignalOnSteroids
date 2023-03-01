@@ -21,6 +21,21 @@ pub struct DiffieHellmanParameters {
     pub public: PublicKey
 }
 
+
+pub fn init_all() -> (State, State) {
+    let alice_shared_secret_params = generate_dh();
+    let bob_shared_secret_params = generate_dh();
+    let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
+
+    let bob_ratchet_dh_params = generate_dh();
+    
+    let alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+    let bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params);
+    return (alice_state, bob_state)
+
+
+}
+
 pub fn dh(user_dh_params: DiffieHellmanParameters, other_user_public: PublicKey) -> SharedSecret {
     return user_dh_params.secret.diffie_hellman(&other_user_public);
 }
@@ -406,13 +421,9 @@ mod tests {
 
     #[test]
     fn ratchet_works_when_alice_sends_multiple_messages_with_no_response_from_bob() {
-        let alice_shared_secret_params = generate_dh();
-        let bob_shared_secret_params = generate_dh();
-        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
-
-        let bob_ratchet_dh_params = generate_dh();
-        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
-        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
 
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let mut associated_data: [u8; 44] = [17; 44];
@@ -431,13 +442,9 @@ mod tests {
 
     #[test]
     fn ratchet_works_when_both_parties_communicate_no_reordering() {
-        let alice_shared_secret_params = generate_dh();
-        let bob_shared_secret_params = generate_dh();
-        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
-
-        let bob_ratchet_dh_params = generate_dh();
-        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
-        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
 
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let mut associated_data: [u8; 44] = [17; 44];
@@ -469,13 +476,9 @@ mod tests {
 
     #[test]
     fn ratchet_works_with_reordering() {
-        let alice_shared_secret_params = generate_dh();
-        let bob_shared_secret_params = generate_dh();
-        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
-
-        let bob_ratchet_dh_params = generate_dh();
-        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
-        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
 
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let associated_data: [u8; 44] = [17; 44];
@@ -498,13 +501,9 @@ mod tests {
 
     #[test]
     fn ratchet_fails_when_hmac_check_fails() {
-        let alice_shared_secret_params = generate_dh();
-        let bob_shared_secret_params = generate_dh();
-        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
-
-        let bob_ratchet_dh_params = generate_dh();
-        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
-        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
 
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let associated_data: [u8; 44] = [17; 44];
@@ -514,13 +513,9 @@ mod tests {
 
     #[test]
     fn ratchet_fails_when_msg_nbr_is_too_high() {
-        let alice_shared_secret_params = generate_dh();
-        let bob_shared_secret_params = generate_dh();
-        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
-
-        let bob_ratchet_dh_params = generate_dh();
-        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
-        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
 
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let associated_data: [u8; 44] = [17; 44];
