@@ -174,6 +174,7 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
     return Ok(plaintext.to_vec());
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Header {
     pub dh_ratchet_key: PublicKey, 
     pub prev_chain_len: usize,
