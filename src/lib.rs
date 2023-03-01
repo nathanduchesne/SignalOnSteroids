@@ -7,6 +7,7 @@ use sha2::Sha256;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use zeroize::Zeroize;
 
 
 const MAX_SKIP: usize = 100;
@@ -144,7 +145,7 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
         return Err("HMAC does not match, authentication failed.")
     }
 
-    let mut ciphertext_without_hmac = ciphertext[..ciphertext.len() - 32].to_vec();
+    let ciphertext_without_hmac = ciphertext[..ciphertext.len() - 32].to_vec();
     let plaintext = Aes256CbcDec::new(&decryption_key.into(), &iv.into())
     .decrypt_padded_vec_mut::<Pkcs7>(&ciphertext_without_hmac)
     .unwrap();
@@ -243,7 +244,7 @@ pub fn skip_message_keys(state: &mut State, until: usize) -> Result<usize, &'sta
     if state.Nr + MAX_SKIP < until {
         return Err("No such message exists.");
     }
-    //TODO: Make sure this is done w/o a boolean flag and use memcmp instead.
+    // Initial state of receiving chain key before receiving first DH ratchet PK.
     if state.CKr != [0;32] {
         while state.Nr < until {
             let mk: MessageKey;
@@ -261,7 +262,8 @@ pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
     state.Nr = 0;
     state.DHr = header.dh_ratchet_key;
     (state.RK, state.CKr) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
-    // TODO: Clean memory from any secret keys
+    // Clean memory from any secret keys
+    state.DHs.secret.zeroize();
     state.DHs = generate_dh();
     (state.RK, state.CKs) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
 
@@ -272,7 +274,7 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
     let plaintext = try_skipped_message_keys(state, &header, ciphertext, associated_data);
     match plaintext {
         Ok(_) => return plaintext,
-        Err("HMAC does not match, authentication failed.") => return Err("Integrity checks failed."),
+        Err("HMAC does not match, authentication failed.") => return Err("HMAC does not match, authentication failed."),
         _ => {
             if header.dh_ratchet_key != state.DHr {
                 match skip_message_keys(state, header.prev_chain_len) {
@@ -304,7 +306,6 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
                 }
             }
         },
-
     }
 }
 
@@ -399,9 +400,6 @@ mod tests {
 
         assert_eq!(decrypted_ciphertext, Err("HMAC does not match, authentication failed."));
     }
-    //TODO: 
-    // 2) test that when HMAC check fails
-    // 3) test that when ratchet PK changes, we can decyrpt previous skipped msgs
 
     #[test]
     fn ratchet_works_when_alice_sends_multiple_messages_with_no_response_from_bob() {
@@ -493,6 +491,38 @@ mod tests {
         assert_eq!(ratchet_decrypt(&mut bob_state, c_a3.0, &c_a3.1, &associated_data).unwrap(), a3);
 
         assert_eq!(ratchet_decrypt(&mut bob_state, c_a1.0, &c_a1.1, &associated_data).unwrap(), alice_plaintext);
+    }
+
+    #[test]
+    fn ratchet_fails_when_hmac_check_fails() {
+        let alice_shared_secret_params = generate_dh();
+        let bob_shared_secret_params = generate_dh();
+        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
+
+        let bob_ratchet_dh_params = generate_dh();
+        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
+        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+
+        let alice_plaintext = *b"Hello Bob! I am Alice.";
+        let associated_data: [u8; 44] = [17; 44];
+        let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1}, &c_a1.1, &associated_data), Err("HMAC does not match, authentication failed."));
+    }
+
+    #[test]
+    fn ratchet_fails_when_msg_nbr_is_too_high() {
+        let alice_shared_secret_params = generate_dh();
+        let bob_shared_secret_params = generate_dh();
+        let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
+
+        let bob_ratchet_dh_params = generate_dh();
+        let mut bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params.clone());
+        let mut alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
+
+        let alice_plaintext = *b"Hello Bob! I am Alice.";
+        let associated_data: [u8; 44] = [17; 44];
+        let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1 + MAX_SKIP}, &c_a1.1, &associated_data), Err("No such message exists."));
     }
 
 
