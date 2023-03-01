@@ -27,10 +27,16 @@ pub fn init_all() -> (State, State) {
     let bob_shared_secret_params = generate_dh();
     let shared_secret = dh(alice_shared_secret_params, bob_shared_secret_params.public);
 
+    // Signal algorithm states: " To allow Bob to send messages immediately after initialization Bob's sending chain key 
+    // and Alice's receiving chain key could be initialized to a shared secret."
+    let alice_shared_ratchet_params = generate_dh();
+    let bob_shared_ratchet_params = generate_dh();
+    let ratchet_shared_secret = dh(alice_shared_ratchet_params, bob_shared_ratchet_params.public);
+
     let bob_ratchet_dh_params = generate_dh();
     
-    let alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public);
-    let bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params);
+    let alice_state = ratchet_init_alice(&shared_secret, &bob_ratchet_dh_params.public, &ratchet_shared_secret);
+    let bob_state = ratchet_init_bob(&shared_secret, bob_ratchet_dh_params, &ratchet_shared_secret);
     return (alice_state, bob_state)
 
 
@@ -205,7 +211,7 @@ pub struct State {
 }
 
 #[allow(non_snake_case)]
-pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> State {
+pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey, ratchet_shared_secret: &SharedSecret) -> State {
     let dh_pair = generate_dh();
     let (root_key, chain_key) = kdf_rk(SK.as_bytes(), dh(dh_pair.clone(), *bob_dh_public_key));
     State { 
@@ -213,7 +219,7 @@ pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> S
          DHr: bob_dh_public_key.clone(), 
          RK: root_key, 
          CKs: chain_key, 
-         CKr: [0; 32], 
+         CKr: ratchet_shared_secret.to_bytes(), 
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
@@ -222,13 +228,13 @@ pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey) -> S
 }
 
 #[allow(non_snake_case)]
-pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParameters) -> State {
+pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParameters, ratchet_shared_secret: &SharedSecret) -> State {
     let filling_value = generate_dh().public;
     State { 
          DHs: bob_dh_key_pair,
          DHr: filling_value, 
          RK: SK.to_bytes(), 
-         CKs: [0; 32], 
+         CKs: ratchet_shared_secret.to_bytes(), 
          CKr: [0; 32], 
          Ns: 0, 
          Nr: 0, 
@@ -521,6 +527,30 @@ mod tests {
         let associated_data: [u8; 44] = [17; 44];
         let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
         assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1 + MAX_SKIP}, &c_a1.1, &associated_data), Err("No such message exists."));
+    }
+
+    #[test]
+    fn ratchet_succeeds_when_bob_starts_communication() {
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
+
+        let bob_msg = *b"What if I start?";
+        let associated_data: [u8; 44] = [17; 44];
+        let bob_ciphertext = ratchet_encrypt(&mut bob_state, &bob_msg, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut alice_state, bob_ciphertext.0, &bob_ciphertext.1, &associated_data).unwrap(), bob_msg);
+    }
+
+    #[test]
+    fn ratchet_succeeds_with_arbitrary_length_msg_using_dynamic_alloc() {
+        let mut alice_state: State;
+        let mut bob_state: State;
+        (alice_state, bob_state) = init_all();
+
+        let bob_msg = *b"Lorem ipsum dolor sit amet, consectetur adipiscing elit. Morbi porttitor neque at euismod dapibus. Pellentesque aliquet auctor dolor. Vivamus venenatis leo a purus dictum, eget rhoncus orci scelerisque. Maecenas ultricies ipsum ac est posuere, et dapibus eros interdum. Vestibulum lacinia id purus et vulputate. Nam commodo purus ut tempus dapibus. Curabitur in hendrerit ex. Donec consectetur justo eu tortor molestie imperdiet. Fusce dapibus mollis orci id interdum. Mauris ac scelerisque augue, eu malesuada velit. Ut quis massa dolor.";
+        let associated_data: [u8; 44] = [17; 44];
+        let bob_ciphertext = ratchet_encrypt(&mut bob_state, &bob_msg, &associated_data);
+        assert_eq!(ratchet_decrypt(&mut alice_state, bob_ciphertext.0, &bob_ciphertext.1, &associated_data).unwrap(), bob_msg);
     }
 
 
