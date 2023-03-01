@@ -400,6 +400,9 @@ mod tests {
 
         assert_eq!(decrypted_ciphertext, Err("HMAC does not match, authentication failed."));
     }
+    //TODO: 
+    // 2) test that when HMAC check fails
+    // 3) test that when ratchet PK changes, we can decyrpt previous skipped msgs
 
     #[test]
     fn ratchet_works_when_alice_sends_multiple_messages_with_no_response_from_bob() {
