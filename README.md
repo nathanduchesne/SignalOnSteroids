@@ -6,3 +6,7 @@ The Signal protocol is used as the de facto standard in secure messaging. Howeve
 - In-band detection of active attacks (i.e. how the client of the receiver can detect the impersonation of the sender [3]).
 - Out-of-band detection of active attacks (i.e. how the receiver can detect the impersonation of the sender out-of-band, for example using QR codes).
 These solutions are often only theoretical and therefore their potential impact on the efficiency of real systems is hard to quantify. The goal of the project would be to implement some, or all, of the improvements mentioned above and benchmark them. In a first step, these could be implemented as a stand-alone implementation. Then, if time permits, the system could be integrated directly into the Signal source code.
+
+## Running tests and benchmarks
+Unit tests are in lib.rs in the ```tests``` module and can be run from the repository root by calling ```cargo test```.  
+Benchmarks for the Ratcheted Communication (RC) API ```Initall, Send``` and ```Receive``` can be run using ```cargo bench```.
