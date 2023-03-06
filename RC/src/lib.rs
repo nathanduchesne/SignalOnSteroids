@@ -178,12 +178,13 @@ pub fn decrypt(mk: &MessageKey, ciphertext: &[u8], associated_data: &[u8]) -> Re
 pub struct Header {
     pub dh_ratchet_key: PublicKey, 
     pub prev_chain_len: usize,
-    pub msg_nbr: usize
+    pub msg_nbr: usize,
+    pub epoch: usize
 }
 
 /// Syntactic sugar to match the Signal Double Ratchet Algorithm API
-pub fn header(dh_pair: PublicKey, pn: usize, n: usize) -> Header {
-    Header { dh_ratchet_key: dh_pair, prev_chain_len: pn, msg_nbr: n }
+pub fn header(dh_pair: PublicKey, pn: usize, n: usize, epoch: usize) -> Header {
+    Header { dh_ratchet_key: dh_pair, prev_chain_len: pn, msg_nbr: n, epoch: epoch }
 }
 
 pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
@@ -208,7 +209,8 @@ pub struct State {
     pub Ns: usize,
     pub Nr: usize,
     pub PN: usize,
-    pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>
+    pub MKSKIPPED: HashMap<(PublicKey, usize), MessageKey>,
+    pub epoch: usize
 }
 
 #[allow(non_snake_case)]
@@ -224,7 +226,8 @@ pub fn ratchet_init_alice(SK: &SharedSecret, bob_dh_public_key: &PublicKey, ratc
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
-         MKSKIPPED: HashMap::new()
+         MKSKIPPED: HashMap::new(),
+         epoch: 0
         }
 }
 
@@ -240,7 +243,8 @@ pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParamet
          Ns: 0, 
          Nr: 0, 
          PN: 0, 
-         MKSKIPPED: HashMap::new()
+         MKSKIPPED: HashMap::new(),
+         epoch: 0
         }
 }
 
@@ -248,7 +252,7 @@ pub fn ratchet_init_bob(SK: &SharedSecret, bob_dh_key_pair: DiffieHellmanParamet
 pub fn ratchet_encrypt(state: &mut State, plaintext: &[u8], associated_data: &[u8]) -> (Header, Vec<u8>) {
     let mk: MessageKey;
     (state.CKs, mk) = kdf_ck(&state.CKs);
-    let header = header(state.DHs.public, state.PN, state.Ns);
+    let header = header(state.DHs.public, state.PN, state.Ns, state.epoch);
     state.Ns += 1;
     return (header, encrypt(&mk, plaintext, associated_data));
 }
@@ -288,6 +292,7 @@ pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
     state.DHs.secret.zeroize();
     state.DHs = generate_dh();
     (state.RK, state.CKs) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
+    state.epoch += 1;
 
 }
 
@@ -330,6 +335,26 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
         },
     }
 }
+
+pub struct Ordinal {
+    pub epoch: usize,
+    pub index: usize
+}
+
+pub fn send(state: &mut State, associated_data: &[u8], plaintext: &[u8]) -> (Ordinal, Header, Vec<u8>) {
+    let (header, ciphertext) = ratchet_encrypt(state, plaintext, associated_data);
+    return (Ordinal{epoch: state.epoch, index: header.msg_nbr}, header, ciphertext)
+}
+
+pub fn receive(state: &mut State, associated_data: &[u8], header: Header, ciphertext: &[u8]) -> (bool, Ordinal, Vec<u8>) {
+    let decryption_result = ratchet_decrypt(state, header, ciphertext, associated_data);
+    match decryption_result {
+        Ok(val) => (true, Ordinal{epoch: header.epoch, index: header.msg_nbr}, val),
+        Err(_) => (false, Ordinal{epoch: 0, index: 0}, Vec::new())
+    }
+}
+
+
 
 
 
@@ -515,7 +540,7 @@ mod tests {
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let associated_data: [u8; 44] = [17; 44];
         let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
-        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1}, &c_a1.1, &associated_data), Err("HMAC does not match, authentication failed."));
+        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1, epoch: 0}, &c_a1.1, &associated_data), Err("HMAC does not match, authentication failed."));
     }
 
     #[test]
@@ -527,7 +552,7 @@ mod tests {
         let alice_plaintext = *b"Hello Bob! I am Alice.";
         let associated_data: [u8; 44] = [17; 44];
         let c_a1 = ratchet_encrypt(&mut alice_state, &alice_plaintext, &associated_data);
-        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1 + MAX_SKIP}, &c_a1.1, &associated_data), Err("No such message exists."));
+        assert_eq!(ratchet_decrypt(&mut bob_state, Header{dh_ratchet_key: c_a1.0.dh_ratchet_key, prev_chain_len: c_a1.0.prev_chain_len, msg_nbr: c_a1.0.msg_nbr + 1 + MAX_SKIP, epoch: 0}, &c_a1.1, &associated_data), Err("No such message exists."));
     }
 
     #[test]
