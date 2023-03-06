@@ -8,5 +8,5 @@ The Signal protocol is used as the de facto standard in secure messaging. Howeve
 These solutions are often only theoretical and therefore their potential impact on the efficiency of real systems is hard to quantify. The goal of the project would be to implement some, or all, of the improvements mentioned above and benchmark them. In a first step, these could be implemented as a stand-alone implementation. Then, if time permits, the system could be integrated directly into the Signal source code.
 
 ## Running tests and benchmarks
-Unit tests are in lib.rs in the ```tests``` module and can be run from the repository root by calling ```cargo test```.  
-Benchmarks for the Ratcheted Communication (RC) API ```Initall, Send``` and ```Receive``` can be run using ```cargo bench```.
+Unit tests are in RC/src/lib.rs in the ```tests``` module and can be run from the RC directory by calling ```cargo test```.  
+Benchmarks for the Ratcheted Communication (RC) API ```Initall, Send``` and ```Receive``` can be run from the RC directory using ```cargo bench```.
