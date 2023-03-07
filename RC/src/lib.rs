@@ -335,7 +335,7 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
         },
     }
 }
-
+#[derive(Hash, Eq, PartialEq, Debug)]
 pub struct Ordinal {
     pub epoch: usize,
     pub index: usize
