@@ -1,11 +1,13 @@
 extern crate rc; 
-use std::collections::HashSet;
+use std::hash::{Hash, self};
+use std::mem::size_of;
+use std::{collections::HashSet, num};
 use std::cmp::Ordering;
 use hex_literal::hex;
 use sha2::{Sha256, Sha512, Digest};
 
 
-use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send};
+use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use bytevec::{ByteEncodable, ByteDecodable};
 
@@ -33,20 +35,25 @@ pub fn rrc_init_all() -> (RRC_State, RRC_State) {
 
     return (alice_state, bob_state);
 }
-#[derive(Hash, Eq, PartialEq, Debug)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone)]
 pub struct Message {
     pub ordinal: Ordinal,
-    pub content: Vec<u8>
+    //pub content: Vec<u8>
+    pub content: [u8;32]
 }
 
 pub struct Ciphertext {
     pub ciphertext: Vec<u8>,
     pub S: HashSet<Message>,
-    pub R: HashSet<Message>
+    pub R: (HashSet<Ordinal>, [u8;32])
 }
 
-fn get_hash_r(R: HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] {
-    let mut R_sorted = R.into_iter().collect::<Vec<Message>>();
+fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] {
+    //let mut R_sorted = R.into_iter().collect::<Vec<Message>>();
+    let mut R_sorted : Vec<Message> = Vec::new();
+    for msg in R.iter() {
+        R_sorted.push(msg.clone());
+    }
     let orders = vec![0, 1];
     R_sorted.sort_by(|a, b| {
         orders.iter().fold(Ordering::Equal, |acc, &field| {
@@ -69,16 +76,111 @@ fn get_hash_r(R: HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] {
 
 }
 
+fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
+    let mut R_sorted : Vec<Ordinal> = Vec::new();
+    for ordinal in R.iter() {
+        R_sorted.push(ordinal.clone());
+    }
+    //let mut R_sorted = R.into_iter().collect::<Vec<Ordinal>>();
+    let orders = vec![0, 1];
+    R_sorted.sort_by(|a, b| {
+        orders.iter().fold(Ordering::Equal, |acc, &field| {
+            acc.then_with(|| {
+                match field {
+                    0 => a.epoch.cmp(&b.epoch),
+                    _ => a.index.cmp(&b.index),
+                }
+            })
+        })
+    });
+    let mut hasher = Sha256::new();
+    let iterator = R_sorted.iter();  
+    let usize_for_env = size_of::<usize>();
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    for ordinal in iterator {
+        ordinal.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..usize_for_env]);
+        ordinal.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[usize_for_env..2 * usize_for_env]);
+        hasher.update(&ordinal_as_bytes);
+    }
+    return hasher.finalize().try_into().unwrap();
 
-pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8], plaintext: &[u8]) -> () {
-    // Get nums'
-    // Get hash of R 
+}
+
+
+pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
+    let mut nums_prime: HashSet<Ordinal> = HashSet::new();
+    let mut nums_prime_cpy: HashSet<Ordinal> = HashSet::new();
+    for msg in state.R.iter() {
+        nums_prime.insert(msg.ordinal);
+        nums_prime_cpy.insert(msg.ordinal);
+    }
+    let mut R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime, get_hash_msg_set(&state.R, state.hash_key_prime));
+    let associated_data_prime: [u8; 128] = [0;128];
+    associated_data.clone_from_slice(&associated_data_prime[0..32]);
+    get_hash_msg_set(&state.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
+    get_hash_ordinal_set(&R_prime.0).clone_from_slice(&associated_data_prime[64..96]);
+    R_prime.1.clone_from_slice(&associated_data_prime[96..128]);
+
+    let sent: (Ordinal, Header, Vec<u8>) = send(&mut state.state, &associated_data_prime, plaintext);
+    let ciphertext: Ciphertext = Ciphertext{ciphertext: sent.2, S: state.S.clone(), R: (nums_prime_cpy, R_prime.1.clone())};
+
+    let mut hasher = Sha256::new();
+    hasher.update(&state.hash_key);
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    sent.0.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..size_of::<usize>()]);
+    sent.0.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2]);
+    hasher.update(ordinal_as_bytes);
+    hasher.update(associated_data);
+    hasher.update(&ciphertext.ciphertext);
+    hasher.update(get_hash_msg_set(&ciphertext.S, [0;32]));
+    hasher.update(get_hash_ordinal_set(&ciphertext.R.0));
+    hasher.update(&ciphertext.R.1);
+    let h: [u8;32] = hasher.finalize().try_into().unwrap();
+    state.S.insert(Message{ordinal: sent.0, content: h});
+    return (sent.0, ciphertext, sent.1);
     
 
-    let(num, header, ciphertext) = send(&mut state.state, associated_data, plaintext);
 }
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
+
+pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
+    let associated_data_prime: [u8; 128] = [0;128];
+    associated_data.clone_from_slice(&associated_data_prime[0..32]);
+    get_hash_msg_set(&ct.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
+    get_hash_ordinal_set(&ct.R.0).clone_from_slice(&associated_data_prime[64..96]);
+    ct.R.1.clone_from_slice(&associated_data_prime[96..128]);
+
+    let (acc, num, pt) = receive(&mut state.state, associated_data, header, &ct.ciphertext);
+    if !acc {
+        return (false, num, Vec::new());
+    }
+    let mut hasher = Sha256::new();
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    num.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..size_of::<usize>()]);
+    num.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2]);
+    hasher.update(ordinal_as_bytes);
+    hasher.update(associated_data);
+    hasher.update(&ct.ciphertext);
+    hasher.update(get_hash_msg_set(&ct.S, [0;32]));
+    hasher.update(get_hash_ordinal_set(&ct.R.0));
+    hasher.update(&ct.R.1);
+    let h: [u8;32] = hasher.finalize().try_into().unwrap();
+    if !checks(state, ct, &h, &num) {
+        return (false, num, Vec::new());
+    }
+    state.R.insert(Message { ordinal: num, content: h });
+    &ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
+    return (acc, num, pt);
+
+} 
+
+enum Security {
+    r_RID,
+    s_RID,
+    BOTH
+}
+
+fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: &Ordinal) -> bool {
+    return false;
 }
 
 #[cfg(test)]
@@ -98,21 +200,21 @@ mod tests {
     }
 
     #[test]
-    fn get_hash_of_set_works() {
+    fn get_hash_of_set_of_msgs_works() {
         let mut first_set: HashSet<Message> = HashSet::new();
         let mut second_set: HashSet<Message> = HashSet::new();
 
-        let first_msg = Message{content: b"premier".to_vec(), ordinal: Ordinal { epoch: 3, index: 17 }};
-        let second_msg = Message{content: b"deuxieme".to_vec(), ordinal: Ordinal { epoch: 3, index: 19 }};
-        let third_msg = Message{content: b"troisieme".to_vec(), ordinal: Ordinal { epoch: 5, index: 0 }};
+        let first_msg = Message{content: [17;32], ordinal: Ordinal { epoch: 3, index: 17 }};
+        let second_msg = Message{content: [15; 32], ordinal: Ordinal { epoch: 3, index: 19 }};
+        let third_msg = Message{content: [244;32], ordinal: Ordinal { epoch: 5, index: 0 }};
 
         first_set.insert(first_msg);
         first_set.insert(second_msg);
         first_set.insert(third_msg);
 
-        let first_msg = Message{content: b"premier".to_vec(), ordinal: Ordinal { epoch: 3, index: 17 }};
-        let second_msg = Message{content: b"deuxieme".to_vec(), ordinal: Ordinal { epoch: 3, index: 19 }};
-        let third_msg = Message{content: b"troisieme".to_vec(), ordinal: Ordinal { epoch: 5, index: 0 }};
+        let first_msg = Message{content: [17; 32], ordinal: Ordinal { epoch: 3, index: 17 }};
+        let second_msg = Message{content: [15;32], ordinal: Ordinal { epoch: 3, index: 19 }};
+        let third_msg = Message{content: [244;32], ordinal: Ordinal { epoch: 5, index: 0 }};
 
         second_set.insert(third_msg);
         second_set.insert(first_msg);
@@ -120,7 +222,30 @@ mod tests {
 
         let hash_key_prime: [u8;32] = [0;32];
 
-        assert_eq!(get_hash_r(first_set, hash_key_prime), get_hash_r(second_set, hash_key_prime));
+        assert_eq!(get_hash_msg_set(&first_set, hash_key_prime), get_hash_msg_set(&second_set, hash_key_prime));
+        
+    }
+
+    #[test]
+    fn get_hash_of_set_of_ordinals_works() {
+        let mut first_set: HashSet<Ordinal> = HashSet::new();
+        let mut second_set: HashSet<Ordinal> = HashSet::new();
+
+        let first_msg = Ordinal { epoch: 3, index: 17 };
+        let second_msg = Ordinal { epoch: 3, index: 19 };
+
+        first_set.insert(first_msg);
+        first_set.insert(second_msg);
+
+        let first_msg = Ordinal { epoch: 3, index: 17 };
+        let second_msg = Ordinal { epoch: 3, index: 19 };
+
+        second_set.insert(second_msg);
+        second_set.insert(first_msg);
+
+        let hash_key_prime: [u8;32] = [0;32];
+
+        assert_eq!(get_hash_ordinal_set(&first_set), get_hash_ordinal_set(&second_set));
         
     }
 }
