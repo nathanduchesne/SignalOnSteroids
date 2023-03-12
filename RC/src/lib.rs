@@ -8,6 +8,7 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use zeroize::Zeroize;
+use std::cmp::Ordering;
 
 
 const MAX_SKIP: usize = 100;
@@ -335,11 +336,12 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
         },
     }
 }
-#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Copy, PartialOrd, Ord)]
 pub struct Ordinal {
     pub epoch: usize,
     pub index: usize
 }
+
 
 pub fn send(state: &mut State, associated_data: &[u8], plaintext: &[u8]) -> (Ordinal, Header, Vec<u8>) {
     let (header, ciphertext) = ratchet_encrypt(state, plaintext, associated_data);

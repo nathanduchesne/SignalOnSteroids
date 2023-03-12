@@ -18,9 +18,10 @@ pub struct RRC_State {
     pub S: HashSet<Message>,
     pub R: HashSet<Message>,
     pub S_ack: HashSet<Message>,
-    pub max_num: u32
+    pub max_num: Ordinal,
+    pub security_level: Security
 }
-pub fn rrc_init_all() -> (RRC_State, RRC_State) {
+pub fn rrc_init_all(security_level: Security) -> (RRC_State, RRC_State) {
     // do key exchange for both hash keys
     let alice_hash_key = generate_dh();
     let alice_hash_key_prime = generate_dh(); 
@@ -30,8 +31,8 @@ pub fn rrc_init_all() -> (RRC_State, RRC_State) {
     let hash_key = dh(alice_hash_key, bob_hash_key.public);
     let hash_key_prime = dh(alice_hash_key_prime, bob_hash_key_prime.public);
     let (mut alice_rc_state, mut bob_rc_state) = init_all();
-    let mut alice_state = RRC_State{state: alice_rc_state, hash_key: hash_key.to_bytes().clone(), hash_key_prime: hash_key_prime.to_bytes().clone(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: 0};
-    let mut bob_state = RRC_State{state: bob_rc_state, hash_key: hash_key.to_bytes(), hash_key_prime: hash_key_prime.to_bytes(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: 0};
+    let mut alice_state = RRC_State{state: alice_rc_state, hash_key: hash_key.to_bytes().clone(), hash_key_prime: hash_key_prime.to_bytes().clone(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level.clone()};
+    let mut bob_state = RRC_State{state: bob_rc_state, hash_key: hash_key.to_bytes(), hash_key_prime: hash_key_prime.to_bytes(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level};
 
     return (alice_state, bob_state);
 }
@@ -54,6 +55,7 @@ fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] 
     for msg in R.iter() {
         R_sorted.push(msg.clone());
     }
+    // Sort according to the Ordinal ordering
     let orders = vec![0, 1];
     R_sorted.sort_by(|a, b| {
         orders.iter().fold(Ordering::Equal, |acc, &field| {
@@ -83,16 +85,7 @@ fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
     }
     //let mut R_sorted = R.into_iter().collect::<Vec<Ordinal>>();
     let orders = vec![0, 1];
-    R_sorted.sort_by(|a, b| {
-        orders.iter().fold(Ordering::Equal, |acc, &field| {
-            acc.then_with(|| {
-                match field {
-                    0 => a.epoch.cmp(&b.epoch),
-                    _ => a.index.cmp(&b.index),
-                }
-            })
-        })
-    });
+    R_sorted.sort();
     let mut hasher = Sha256::new();
     let iterator = R_sorted.iter();  
     let usize_for_env = size_of::<usize>();
@@ -164,7 +157,7 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut C
     hasher.update(get_hash_ordinal_set(&ct.R.0));
     hasher.update(&ct.R.1);
     let h: [u8;32] = hasher.finalize().try_into().unwrap();
-    if !checks(state, ct, &h, &num) {
+    if !checks(state, ct, &h, num) {
         return (false, num, Vec::new());
     }
     state.R.insert(Message { ordinal: num, content: h });
@@ -173,14 +166,62 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut C
 
 } 
 
-enum Security {
+#[derive(Clone, PartialEq)]
+pub enum Security {
     r_RID,
     s_RID,
-    BOTH
+    r_RID_and_s_RID
 }
 
-fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: &Ordinal) -> bool {
-    return false;
+fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal) -> bool {
+    let mut s_bool: bool = false;
+    let mut r_bool: bool = false;
+
+    if state.security_level != Security::r_RID {
+        let mut R_star: HashSet<Message> = HashSet::new();
+        for num_prime in state.S.iter() {
+            if ct.R.0.contains(&num_prime.ordinal) {
+                R_star.insert(num_prime.clone());
+            }
+        }
+        s_bool = get_hash_msg_set(&R_star, state.hash_key_prime) != ct.R.1;
+        if state.security_level == Security::s_RID {
+            return s_bool;
+        }
+    }
+    let mut R_prime: HashSet<Message> = HashSet::new();
+    for num_prime in state.R.iter() {
+        if num_prime.ordinal <= num {
+            R_prime.insert(num_prime.clone());
+        }
+    }
+    r_bool = !ct.S.is_superset(&R_prime);
+    r_bool = r_bool || ct.S.iter().fold(false, |acc, msg| acc || msg.ordinal >= num);
+    if num < state.max_num {
+        r_bool = r_bool || !state.S_ack.contains(&Message { ordinal: num, content: h.to_owned()});
+        r_bool = r_bool || !state.S_ack.is_superset(&ct.S);
+        let mut S_ack_prime: HashSet<Message> = HashSet::new();
+        for acked_msg in state.S_ack.iter() {
+            if acked_msg.ordinal <= num {
+                S_ack_prime.insert(acked_msg.clone());
+            }
+        }
+        r_bool = r_bool || !ct.S.is_superset(&S_ack_prime);
+    }
+    else {
+        state.max_num = num;
+        r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);
+    }
+
+    if (state.security_level == Security::r_RID_and_s_RID) {
+        return r_bool || s_bool; 
+    }
+    else {
+        return r_bool;
+    }
+
+
+    
 }
 
 #[cfg(test)]
@@ -247,5 +288,12 @@ mod tests {
 
         assert_eq!(get_hash_ordinal_set(&first_set), get_hash_ordinal_set(&second_set));
         
+    }
+
+    #[test]
+    fn ordinal_ordering_works() {
+        assert_eq!(true, Ordinal{epoch: 2, index:1} < Ordinal{epoch: 2, index:2});
+        assert_eq!(true, Ordinal{epoch: 1, index:25} < Ordinal{epoch: 2, index:1});
+        assert_eq!(Ordinal{epoch:10, index:5}, Ordinal{epoch:10, index:5});
     }
 }
