@@ -32,13 +32,14 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let mut bob_state: State;
         (alice_state, bob_state) = black_box(init_all());
         let associated_data = black_box(  [0;5]);
-
-        let ciphertext = black_box(ratchet_encrypt(&mut alice_state, &plaintext, &associated_data));
     
 
         c.bench_function(
             "Ratchet receive ", 
-            |b| b.iter(|| ratchet_decrypt(&mut bob_state, ciphertext.0, &ciphertext.1, &associated_data))
+            |b| b.iter(|| 
+                {let (ordinal, header, ciphertext) = rc::send(&mut alice_state, &associated_data, &plaintext);
+                    rc::receive(&mut bob_state, &associated_data, header, &ciphertext);}
+            )
         );
     }
 
