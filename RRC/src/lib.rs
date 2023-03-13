@@ -108,11 +108,12 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[
         nums_prime_cpy.insert(msg.ordinal);
     }
     let mut R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime, get_hash_msg_set(&state.R, state.hash_key_prime));
-    let associated_data_prime: [u8; 128] = [0;128];
+    let mut associated_data_prime: [u8; 128] = [0;128];
     associated_data.clone_from_slice(&associated_data_prime[0..32]);
     get_hash_msg_set(&state.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
     get_hash_ordinal_set(&R_prime.0).clone_from_slice(&associated_data_prime[64..96]);
     R_prime.1.clone_from_slice(&associated_data_prime[96..128]);
+    println!("{:?}", associated_data_prime);
 
     let sent: (Ordinal, Header, Vec<u8>) = send(&mut state.state, &associated_data_prime, plaintext);
     let ciphertext: Ciphertext = Ciphertext{ciphertext: sent.2, S: state.S.clone(), R: (nums_prime_cpy, R_prime.1.clone())};
@@ -141,6 +142,7 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut C
     get_hash_msg_set(&ct.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
     get_hash_ordinal_set(&ct.R.0).clone_from_slice(&associated_data_prime[64..96]);
     ct.R.1.clone_from_slice(&associated_data_prime[96..128]);
+    println!("{:?}", associated_data_prime);
 
     let (acc, num, pt) = receive(&mut state.state, associated_data, header, &ct.ciphertext);
     if !acc {
@@ -213,15 +215,12 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
         r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);
     }
 
-    if (state.security_level == Security::r_RID_and_s_RID) {
-        return r_bool || s_bool; 
+    match state.security_level {
+        Security::r_RID => r_bool,
+        Security::r_RID_and_s_RID => r_bool || s_bool,
+        Security::s_RID => return s_bool
+        
     }
-    else {
-        return r_bool;
-    }
-
-
-    
 }
 
 #[cfg(test)]
@@ -295,5 +294,19 @@ mod tests {
         assert_eq!(true, Ordinal{epoch: 2, index:1} < Ordinal{epoch: 2, index:2});
         assert_eq!(true, Ordinal{epoch: 1, index:25} < Ordinal{epoch: 2, index:1});
         assert_eq!(Ordinal{epoch:10, index:5}, Ordinal{epoch:10, index:5});
+    }
+
+    #[test]
+    fn send_and_receive_normal_functioning() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::s_RID);
+        let mut associated_data = [0u8;32];
+        let plaintext = b"Wassup my dude?";
+        let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &mut associated_data, plaintext);
+        println!("Index pt: {}", ordinal.index);
+        println!("Epoch pt: {}", ordinal.epoch);
+        let (acc, ordinal, plaintext) = rrc_receive(&mut bob_state, &mut associated_data, &mut ciphertext, header);
+        println!("Index ct: {}", ordinal.index);
+        println!("Epoch ct: {}", ordinal.epoch);
+        assert_eq!(acc, true);
     }
 }

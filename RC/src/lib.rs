@@ -352,7 +352,8 @@ pub fn receive(state: &mut State, associated_data: &[u8], header: Header, cipher
     let decryption_result = ratchet_decrypt(state, header, ciphertext, associated_data);
     match decryption_result {
         Ok(val) => (true, Ordinal{epoch: header.epoch, index: header.msg_nbr}, val),
-        Err(_) => (false, Ordinal{epoch: 0, index: 0}, Vec::new())
+        Err(msg) => {println!("{}", msg);
+            return (false, Ordinal{epoch: 0, index: 0}, Vec::new())}
     }
 }
 
