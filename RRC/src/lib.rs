@@ -100,7 +100,7 @@ fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
 }
 
 
-pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
+pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
     let mut nums_prime: HashSet<Ordinal> = HashSet::new();
     let mut nums_prime_cpy: HashSet<Ordinal> = HashSet::new();
     for msg in state.R.iter() {
@@ -109,11 +109,10 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[
     }
     let mut R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime, get_hash_msg_set(&state.R, state.hash_key_prime));
     let mut associated_data_prime: [u8; 128] = [0;128];
-    associated_data.clone_from_slice(&associated_data_prime[0..32]);
-    get_hash_msg_set(&state.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
-    get_hash_ordinal_set(&R_prime.0).clone_from_slice(&associated_data_prime[64..96]);
-    R_prime.1.clone_from_slice(&associated_data_prime[96..128]);
-    println!("{:?}", associated_data_prime);
+    associated_data_prime[0..32].clone_from_slice(associated_data);
+    associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&state.S, [0;32]));
+    associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&R_prime.0));
+    associated_data_prime[96..128].clone_from_slice(&R_prime.1);
 
     let sent: (Ordinal, Header, Vec<u8>) = send(&mut state.state, &associated_data_prime, plaintext);
     let ciphertext: Ciphertext = Ciphertext{ciphertext: sent.2, S: state.S.clone(), R: (nums_prime_cpy, R_prime.1.clone())};
@@ -121,8 +120,8 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[
     let mut hasher = Sha256::new();
     hasher.update(&state.hash_key);
     let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
-    sent.0.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..size_of::<usize>()]);
-    sent.0.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2]);
+    ordinal_as_bytes[0..size_of::<usize>()].clone_from_slice(&sent.0.epoch.to_be_bytes());
+    ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2].clone_from_slice(&sent.0.index.to_be_bytes());
     hasher.update(ordinal_as_bytes);
     hasher.update(associated_data);
     hasher.update(&ciphertext.ciphertext);
@@ -136,22 +135,23 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &mut [u8], plaintext: &[
 
 }
 
-pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
-    let associated_data_prime: [u8; 128] = [0;128];
-    associated_data.clone_from_slice(&associated_data_prime[0..32]);
-    get_hash_msg_set(&ct.S, [0;32]).clone_from_slice(&associated_data_prime[32..64]);
-    get_hash_ordinal_set(&ct.R.0).clone_from_slice(&associated_data_prime[64..96]);
-    ct.R.1.clone_from_slice(&associated_data_prime[96..128]);
-    println!("{:?}", associated_data_prime);
+pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
+    let mut associated_data_prime: [u8; 128] = [0;128];
+    associated_data_prime[0..32].clone_from_slice(associated_data);
+    associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&ct.S, [0;32]));
+    associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&ct.R.0));
+    associated_data_prime[96..128].clone_from_slice(&ct.R.1);
 
-    let (acc, num, pt) = receive(&mut state.state, associated_data, header, &ct.ciphertext);
+    let (acc, num, pt) = receive(&mut state.state, &associated_data_prime, header, &ct.ciphertext);
     if !acc {
+        println!("In here");
         return (false, num, Vec::new());
     }
     let mut hasher = Sha256::new();
+    hasher.update(&state.hash_key);
     let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
-    num.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..size_of::<usize>()]);
-    num.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2]);
+    ordinal_as_bytes[0..size_of::<usize>()].clone_from_slice(&num.epoch.to_be_bytes());
+    ordinal_as_bytes[size_of::<usize>()..size_of::<usize>() * 2].clone_from_slice(&num.index.to_be_bytes());
     hasher.update(ordinal_as_bytes);
     hasher.update(associated_data);
     hasher.update(&ct.ciphertext);
@@ -159,11 +159,16 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &mut [u8], ct: &mut C
     hasher.update(get_hash_ordinal_set(&ct.R.0));
     hasher.update(&ct.R.1);
     let h: [u8;32] = hasher.finalize().try_into().unwrap();
-    if !checks(state, ct, &h, num) {
+    if checks(state, ct, &h, num) {
+        println!("Checks failed");
         return (false, num, Vec::new());
     }
     state.R.insert(Message { ordinal: num, content: h });
-    &ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
+    for sent in ct.S.iter() {
+        let conf = state.S_ack.insert(sent.clone());
+        println!("element was added to s_ack is: {}", conf);
+    }
+    //&ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
     return (acc, num, pt);
 
 } 
@@ -187,6 +192,7 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
             }
         }
         s_bool = get_hash_msg_set(&R_star, state.hash_key_prime) != ct.R.1;
+        println!("s_bool = {}", s_bool);
         if state.security_level == Security::s_RID {
             return s_bool;
         }
@@ -199,10 +205,13 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
     r_bool = !ct.S.is_superset(&R_prime);
     r_bool = r_bool || ct.S.iter().fold(false, |acc, msg| acc || msg.ordinal >= num);
+
+    println!("before if/else, r_bool = {}", r_bool);
     if num < state.max_num {
         r_bool = r_bool || !state.S_ack.contains(&Message { ordinal: num, content: h.to_owned()});
         r_bool = r_bool || !state.S_ack.is_superset(&ct.S);
         let mut S_ack_prime: HashSet<Message> = HashSet::new();
+        println!("Before for loop, r_bool = {}", r_bool);
         for acked_msg in state.S_ack.iter() {
             if acked_msg.ordinal <= num {
                 S_ack_prime.insert(acked_msg.clone());
@@ -212,7 +221,11 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
     else {
         state.max_num = num;
+        println!("state s_ack contains = {}", state.S_ack.len());
+        println!("max state num is = {}:{}",state.max_num.epoch, state.max_num.index);
+        ct.S.difference(&state.S_ack).for_each(|elem| println!("looking at {}:{}", elem.ordinal.epoch, elem.ordinal.index));
         r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);
+        println!("after else, r_bool = {}", r_bool);
     }
 
     match state.security_level {
@@ -298,15 +311,25 @@ mod tests {
 
     #[test]
     fn send_and_receive_normal_functioning() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
         let mut associated_data = [0u8;32];
         let plaintext = b"Wassup my dude?";
-        let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &mut associated_data, plaintext);
-        println!("Index pt: {}", ordinal.index);
-        println!("Epoch pt: {}", ordinal.epoch);
-        let (acc, ordinal, plaintext) = rrc_receive(&mut bob_state, &mut associated_data, &mut ciphertext, header);
-        println!("Index ct: {}", ordinal.index);
-        println!("Epoch ct: {}", ordinal.epoch);
+        let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, plaintext);
+        let (acc, ordinal, decrypted_plaintext) = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
         assert_eq!(acc, true);
+        assert_eq!(plaintext.to_vec(), decrypted_plaintext);
+
+        let plaintext_2 = b"Let me ping you again";
+        let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, plaintext_2);
+        let (acc, ordinal, decrypted_plaintext) = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
+        assert_eq!(acc, true);
+        assert_eq!(plaintext_2.to_vec(), decrypted_plaintext);
+
+        let plaintext_3 = b"My bad I missed your first message! Let me call you back";
+        let (ordinal, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, plaintext_3);
+        let (acc, ordinal, decrypted_plaintext) = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext, header);
+        assert_eq!(acc, true);
+        assert_eq!(plaintext_3.to_vec(), decrypted_plaintext);
+
     }
 }
