@@ -1,10 +1,12 @@
 extern crate rc; 
+use std::collections::{BinaryHeap, BTreeSet};
 use std::hash::{Hash, self};
 use std::mem::size_of;
 use std::{collections::HashSet, num};
 use std::cmp::Ordering;
 use hex_literal::hex;
 use sha2::{Sha256, Sha512, Digest};
+use std::time::{SystemTime};
 
 
 use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
@@ -36,7 +38,7 @@ pub fn rrc_init_all(security_level: Security) -> (RRC_State, RRC_State) {
 
     return (alice_state, bob_state);
 }
-#[derive(Hash, Eq, PartialEq, Debug, Clone)]
+#[derive(Hash, Eq, PartialEq, Debug, Clone, Ord, PartialOrd)]
 pub struct Message {
     pub ordinal: Ordinal,
     //pub content: Vec<u8>
@@ -51,11 +53,13 @@ pub struct Ciphertext {
 
 fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] {
     //let mut R_sorted = R.into_iter().collect::<Vec<Message>>();
-    let mut R_sorted : Vec<Message> = Vec::new();
+    let mut R_sorted: BTreeSet<Message> = BTreeSet::new();
     for msg in R.iter() {
-        R_sorted.push(msg.clone());
+        R_sorted.insert(msg.clone());
     }
     // Sort according to the Ordinal ordering
+    // max cost during bench is 1.6ms for sorting
+    /*
     let orders = vec![0, 1];
     R_sorted.sort_by(|a, b| {
         orders.iter().fold(Ordering::Equal, |acc, &field| {
@@ -67,8 +71,9 @@ fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] 
             })
         })
     });
+    */
     let mut hasher = Sha256::new();
-    let iterator = R_sorted.iter();  
+    let iterator = R_sorted.iter();
     hasher.update(hash_key_prime);  
     for message in iterator {
         hasher.update(&message.content);
@@ -79,17 +84,14 @@ fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] 
 }
 
 fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
-    let mut R_sorted : Vec<Ordinal> = Vec::new();
+    let mut R_sorted : BTreeSet<Ordinal> = BTreeSet::new();
     for ordinal in R.iter() {
-        R_sorted.push(ordinal.clone());
+        R_sorted.insert(ordinal.clone());
     }
-    //let mut R_sorted = R.into_iter().collect::<Vec<Ordinal>>();
-    let orders = vec![0, 1];
-    R_sorted.sort();
     let mut hasher = Sha256::new();
     let iterator = R_sorted.iter();  
     let usize_for_env = size_of::<usize>();
-    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    let ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
     for ordinal in iterator {
         ordinal.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..usize_for_env]);
         ordinal.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[usize_for_env..2 * usize_for_env]);
@@ -102,12 +104,10 @@ fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
 
 pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
     let mut nums_prime: HashSet<Ordinal> = HashSet::new();
-    let mut nums_prime_cpy: HashSet<Ordinal> = HashSet::new();
     for msg in state.R.iter() {
         nums_prime.insert(msg.ordinal);
-        nums_prime_cpy.insert(msg.ordinal);
     }
-    let mut R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime, get_hash_msg_set(&state.R, state.hash_key_prime));
+    let R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime.clone(), get_hash_msg_set(&state.R, state.hash_key_prime));
     let mut associated_data_prime: [u8; 128] = [0;128];
     associated_data_prime[0..32].clone_from_slice(associated_data);
     associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&state.S, [0;32]));
@@ -115,7 +115,7 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[
     associated_data_prime[96..128].clone_from_slice(&R_prime.1);
 
     let sent: (Ordinal, Header, Vec<u8>) = send(&mut state.state, &associated_data_prime, plaintext);
-    let ciphertext: Ciphertext = Ciphertext{ciphertext: sent.2, S: state.S.clone(), R: (nums_prime_cpy, R_prime.1.clone())};
+    let ciphertext: Ciphertext = Ciphertext{ciphertext: sent.2, S: state.S.clone(), R: (nums_prime, R_prime.1.clone())};
 
     let mut hasher = Sha256::new();
     hasher.update(&state.hash_key);
@@ -137,14 +137,15 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[
 
 pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
     let mut associated_data_prime: [u8; 128] = [0;128];
+
     associated_data_prime[0..32].clone_from_slice(associated_data);
     associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&ct.S, [0;32]));
     associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&ct.R.0));
     associated_data_prime[96..128].clone_from_slice(&ct.R.1);
 
     let (acc, num, pt) = receive(&mut state.state, &associated_data_prime, header, &ct.ciphertext);
+    
     if !acc {
-        println!("In here");
         return (false, num, Vec::new());
     }
     let mut hasher = Sha256::new();
@@ -163,12 +164,10 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut C
         println!("Checks failed");
         return (false, num, Vec::new());
     }
+
     state.R.insert(Message { ordinal: num, content: h });
-    for sent in ct.S.iter() {
-        let conf = state.S_ack.insert(sent.clone());
-        println!("element was added to s_ack is: {}", conf);
-    }
-    //&ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
+    state.S_ack.insert(Message { ordinal:Ordinal { epoch: header.epoch, index: header.msg_nbr }, content: h });
+    let _ = &ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
     return (acc, num, pt);
 
 } 
@@ -192,7 +191,6 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
             }
         }
         s_bool = get_hash_msg_set(&R_star, state.hash_key_prime) != ct.R.1;
-        println!("s_bool = {}", s_bool);
         if state.security_level == Security::s_RID {
             return s_bool;
         }
@@ -205,13 +203,11 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
     r_bool = !ct.S.is_superset(&R_prime);
     r_bool = r_bool || ct.S.iter().fold(false, |acc, msg| acc || msg.ordinal >= num);
-
-    println!("before if/else, r_bool = {}", r_bool);
+    println!("r_bool before if else {}", r_bool);
     if num < state.max_num {
         r_bool = r_bool || !state.S_ack.contains(&Message { ordinal: num, content: h.to_owned()});
         r_bool = r_bool || !state.S_ack.is_superset(&ct.S);
         let mut S_ack_prime: HashSet<Message> = HashSet::new();
-        println!("Before for loop, r_bool = {}", r_bool);
         for acked_msg in state.S_ack.iter() {
             if acked_msg.ordinal <= num {
                 S_ack_prime.insert(acked_msg.clone());
@@ -221,13 +217,11 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
     else {
         state.max_num = num;
-        println!("state s_ack contains = {}", state.S_ack.len());
-        println!("max state num is = {}:{}",state.max_num.epoch, state.max_num.index);
-        ct.S.difference(&state.S_ack).for_each(|elem| println!("looking at {}:{}", elem.ordinal.epoch, elem.ordinal.index));
         r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);
-        println!("after else, r_bool = {}", r_bool);
+        println!("r_bool in else {}", r_bool);
     }
 
+    println!("s_bool is {}, r_bool is {}", s_bool, r_bool);
     match state.security_level {
         Security::r_RID => r_bool,
         Security::r_RID_and_s_RID => r_bool || s_bool,
@@ -331,5 +325,42 @@ mod tests {
         assert_eq!(acc, true);
         assert_eq!(plaintext_3.to_vec(), decrypted_plaintext);
 
+    }
+
+    #[test]
+    fn out_of_order_delivery() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude?";
+        let plaintext2 = b"Wassup my dude2?";
+        let plaintext3 = b"Wassup my dude3?";
+        let plaintext4 = b"Wassup my dude4?";
+        let plaintext5 = b"Wassup my dude5?";
+
+        let mut ct1 = rrc_send(&mut alice_state, &associated_data, plaintext1);
+        let mut ct2 = rrc_send(&mut alice_state, &associated_data, plaintext2);
+        let mut ct3 = rrc_send(&mut alice_state, &associated_data, plaintext3);
+        let mut ct4 = rrc_send(&mut alice_state, &associated_data, plaintext4);
+        let mut ct5 = rrc_send(&mut alice_state, &associated_data, plaintext5);
+
+        let pt5 = rrc_receive(&mut bob_state, &associated_data, &mut ct5.1, ct5.2);
+        assert_eq!(pt5.0, true);
+        assert_eq!(plaintext5.to_vec(), pt5.2);
+
+        let pt1 = rrc_receive(&mut bob_state, &associated_data, &mut ct1.1, ct1.2);
+        assert_eq!(pt1.0, true);
+        assert_eq!(plaintext1.to_vec(), pt1.2);
+
+        let pt4 = rrc_receive(&mut bob_state, &associated_data, &mut ct4.1, ct4.2);
+        assert_eq!(pt4.0, true);
+        assert_eq!(plaintext4.to_vec(), pt4.2);
+
+        let pt3 = rrc_receive(&mut bob_state, &associated_data, &mut ct3.1, ct3.2);
+        assert_eq!(pt3.0, true);
+        assert_eq!(plaintext3.to_vec(), pt3.2);
+
+        let pt2 = rrc_receive(&mut bob_state, &associated_data, &mut ct2.1, ct2.2);
+        assert_eq!(pt2.0, true);
+        assert_eq!(plaintext2.to_vec(), pt2.2);
     }
 }

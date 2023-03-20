@@ -8,7 +8,8 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use zeroize::Zeroize;
-use std::cmp::Ordering;
+use std::time::{SystemTime};
+
 
 
 const MAX_SKIP: usize = 100;
@@ -63,17 +64,21 @@ type MessageKey = [u8; 32];
 /// uses of HKDF in the application.
 pub fn kdf_rk(rk: &[u8; 32], dh_out: SharedSecret) -> (RootKey, ChainKey) {
     let ikm = dh_out.as_bytes();
+
     let salt = rk;
     let info = hex!("734f73666f724550464c"); // 'sOsforEPFL'
 
     let hk = Hkdf::<Sha256>::new(Some(&salt[..]), ikm);
+
     let mut okm = [0u8; 64];
     hk.expand(&info, &mut okm)
         .expect("64 is a valid length for Sha256 to output");
+    
     let mut root_key = [0u8; 32];
     root_key.clone_from_slice(&okm[0..32]);
     let mut chain_key = [0u8; 32];
     chain_key.clone_from_slice(&okm[32..64]);
+
     return (root_key, chain_key);
 }
 
@@ -288,6 +293,9 @@ pub fn dh_ratchet(state: &mut State, header: &Header) -> () {
     state.Ns = 0;
     state.Nr = 0;
     state.DHr = header.dh_ratchet_key;
+
+    let test = dh(state.DHs.clone(), state.DHr);
+    
     (state.RK, state.CKr) = kdf_rk(&state.RK, dh(state.DHs.clone(), state.DHr));
     // Clean memory from any secret keys
     state.DHs.secret.zeroize();
