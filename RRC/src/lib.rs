@@ -15,6 +15,7 @@ use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use bytevec::{ByteEncodable, ByteDecodable};
 
+#[derive(Clone)]
 pub struct RRC_State {
     pub state: State,
     pub hash_key: [u8;32],
@@ -171,10 +172,6 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut C
     state.R.insert(Message { ordinal: num, content: h });
     //state.S_ack.insert(Message { ordinal:Ordinal { epoch: header.epoch, index: header.msg_nbr }, content: h });
     let _ = &ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
-    //println!("s_ack contains");
-    //for ordinal in state.S_ack.iter() {
-      //  println!("{}:{}", ordinal.ordinal.epoch, ordinal.ordinal.index);
-    //}
     return (acc, num, pt);
 
 } 
@@ -208,13 +205,13 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
             R_prime.insert(num_prime.clone());
         }
     }
-    r_bool = !ct.S.is_superset(&R_prime);
+    r_bool = !R_prime.is_subset(&ct.S);
     r_bool = r_bool || ct.S.iter().fold(false, |acc, msg| acc || msg.ordinal >= num);
     //println!("r_bool before if else {}", r_bool);
     if num < state.max_num {
         r_bool = r_bool || !state.S_ack.contains(&Message { ordinal: num, content: h.to_owned()});
         //println!("r_bool after s_ack contains msg{}", r_bool);
-        r_bool = r_bool || !state.S_ack.is_superset(&ct.S);
+        r_bool = r_bool || !ct.S.is_subset(&state.S_ack);
         //println!("r_bool after s_ack superset of S{}", r_bool);
         let mut S_ack_prime: HashSet<Message> = HashSet::new();
         for acked_msg in state.S_ack.iter() {
@@ -374,6 +371,80 @@ mod tests {
         assert_eq!(pt2.0, true);
         assert_eq!(plaintext2.to_vec(), pt2.2);
     }
+
+    #[test]
+    fn out_of_order_delivery_both_send() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude?";
+        let plaintext2 = b"Wassup my dude2?";
+        let plaintext3 = b"Wassup my dude3?";
+        let plaintext4 = b"Wassup my dude4?";
+
+        let mut ct1 = rrc_send(&mut alice_state, &associated_data, plaintext1);
+        let mut ct2 = rrc_send(&mut alice_state, &associated_data, plaintext2);
+
+        let pt2 = rrc_receive(&mut bob_state, &associated_data, &mut ct2.1, ct2.2);
+        assert_eq!(pt2.0, true);
+        assert_eq!(plaintext2.to_vec(), pt2.2);
+
+        let mut ct3 = rrc_send(&mut bob_state, &associated_data, plaintext3);
+        let mut ct4 = rrc_send(&mut bob_state, &associated_data, plaintext4);
+
+        let pt4 = rrc_receive(&mut alice_state, &associated_data, &mut ct4.1, ct4.2);
+        assert_eq!(pt4.0, true);
+        assert_eq!(plaintext4.to_vec(), pt4.2);
+
+        let pt3 = rrc_receive(&mut alice_state, &associated_data, &mut ct3.1, ct3.2);
+        assert_eq!(pt3.0, true);
+        assert_eq!(plaintext3.to_vec(), pt3.2);
+
+        let pt1 = rrc_receive(&mut bob_state, &associated_data, &mut ct1.1, ct1.2);
+        assert_eq!(pt1.0, true);
+        assert_eq!(plaintext1.to_vec(), pt1.2);
+    }
+
+    #[test]
+    fn adversarial_example_is_detected_for_s_rid() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let mut eve_state = alice_state.clone();
+
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude?";
+
+        let mut malicious_msg = rrc_send(&mut eve_state, &associated_data, plaintext1);
+        rrc_receive(&mut bob_state, &associated_data, &mut malicious_msg.1, malicious_msg.2);
+
+        let plaintext2 = b"I'm fine how are you Alice?";
+        let mut ciphertext1 = rrc_send(&mut bob_state, &associated_data, plaintext2);
+        let result = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext1.1, ciphertext1.2);
+        // Check that we detected that the other person received a forgery.
+        assert_eq!(result.0, false);
+    }
+
+    #[test]
+    fn adversarial_example_is_detected_for_r_rid() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let mut eve_state = alice_state.clone();
+
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude? (fake)";
+
+        let mut malicious_msg = rrc_send(&mut eve_state, &associated_data, plaintext1);
+        rrc_receive(&mut bob_state, &associated_data, &mut malicious_msg.1, malicious_msg.2);
+
+        let plaintext1 = b"Wassup my dude? (real)";
+        let mut legit_msg = rrc_send(&mut alice_state, &associated_data, plaintext1);
+        let result = rrc_receive(&mut bob_state, &associated_data, &mut legit_msg.1, legit_msg.2);
+
+        // Detect that we've received a forgery
+        assert_eq!(result.0, false);
+    }
+
+
+
+
+
 
     // The goal of this test is to have a similar benchmark to the one in "Optimal Symmetric Ratcheting for Secure Communication" p25/26
     // Since this does not actually test anything, it is not run by default: uncomment the following line to do so.
