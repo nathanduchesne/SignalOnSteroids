@@ -7,6 +7,8 @@ use std::cmp::Ordering;
 use hex_literal::hex;
 use sha2::{Sha256, Sha512, Digest};
 use std::time::{SystemTime};
+use std::fs::{File};
+use std::io::prelude::*;
 
 
 use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
@@ -45,6 +47,7 @@ pub struct Message {
     pub content: [u8;32]
 }
 
+#[derive(Clone)]
 pub struct Ciphertext {
     pub ciphertext: Vec<u8>,
     pub S: HashSet<Message>,
@@ -166,8 +169,12 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut C
     }
 
     state.R.insert(Message { ordinal: num, content: h });
-    state.S_ack.insert(Message { ordinal:Ordinal { epoch: header.epoch, index: header.msg_nbr }, content: h });
+    //state.S_ack.insert(Message { ordinal:Ordinal { epoch: header.epoch, index: header.msg_nbr }, content: h });
     let _ = &ct.S.iter().for_each(|elem| { state.S_ack.insert(elem.clone());});
+    //println!("s_ack contains");
+    //for ordinal in state.S_ack.iter() {
+      //  println!("{}:{}", ordinal.ordinal.epoch, ordinal.ordinal.index);
+    //}
     return (acc, num, pt);
 
 } 
@@ -203,25 +210,29 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
     r_bool = !ct.S.is_superset(&R_prime);
     r_bool = r_bool || ct.S.iter().fold(false, |acc, msg| acc || msg.ordinal >= num);
-    println!("r_bool before if else {}", r_bool);
+    //println!("r_bool before if else {}", r_bool);
     if num < state.max_num {
         r_bool = r_bool || !state.S_ack.contains(&Message { ordinal: num, content: h.to_owned()});
+        //println!("r_bool after s_ack contains msg{}", r_bool);
         r_bool = r_bool || !state.S_ack.is_superset(&ct.S);
+        //println!("r_bool after s_ack superset of S{}", r_bool);
         let mut S_ack_prime: HashSet<Message> = HashSet::new();
         for acked_msg in state.S_ack.iter() {
-            if acked_msg.ordinal <= num {
+            if acked_msg.ordinal < num {
                 S_ack_prime.insert(acked_msg.clone());
             }
         }
-        r_bool = r_bool || !ct.S.is_superset(&S_ack_prime);
+        r_bool = r_bool || !S_ack_prime.is_subset(&ct.S);
+        //println!("r_bool after S superset of S_ack{}", r_bool);
     }
     else {
         state.max_num = num;
-        r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);
-        println!("r_bool in else {}", r_bool);
+        r_bool = r_bool || state.S_ack.difference(&ct.S).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num); // -> potential fix
+        // r_bool = r_bool || ct.S.difference(&state.S_ack).into_iter().fold(false, |acc, msg| acc || msg.ordinal < state.max_num);                      -> original paper
+        //println!("r_bool in else {}", r_bool);
     }
 
-    println!("s_bool is {}, r_bool is {}", s_bool, r_bool);
+    //println!("s_bool is {}, r_bool is {}", s_bool, r_bool);
     match state.security_level {
         Security::r_RID => r_bool,
         Security::r_RID_and_s_RID => r_bool || s_bool,
@@ -362,5 +373,111 @@ mod tests {
         let pt2 = rrc_receive(&mut bob_state, &associated_data, &mut ct2.1, ct2.2);
         assert_eq!(pt2.0, true);
         assert_eq!(plaintext2.to_vec(), pt2.2);
+    }
+
+    // The goal of this test is to have a similar benchmark to the one in "Optimal Symmetric Ratcheting for Secure Communication" p25/26
+    // Since this does not actually test anything, it is not run by default: uncomment the following line to do so.
+    //#[test]
+    fn benchmarks_total_exec() {
+        let message = b"This will be sent by both participants";
+        let associated_data = [0u8;32];
+
+        let mut file = File::create("../../../Report/Plots/BenchLogs/typesOfCommunication.txt").expect("bla");
+
+        let NBR_DIFFERENT_RUNS = 15;
+
+        // Alternating. Alice and Bob take turns sending messages. 
+        // Alice sends the even-numbered messages and Bob sends the odd-numbered messages.
+        for i in 1..NBR_DIFFERENT_RUNS + 1 {
+            let total_nbr_msgs = 100 * i;
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let start = SystemTime::now();
+            for msg_nbr in 0..total_nbr_msgs {
+                if msg_nbr % 2 == 0 {
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, message);
+                    let result = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
+                }
+                else {
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, message);
+                    let result = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext, header);
+                }
+            }
+            file.write(i.to_string().as_bytes());
+            file.write(b" ");
+            file.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes());
+            file.write_all(b"\n"); 
+        }
+
+        // Unidirectional. Alice first sends n/2 messages to Bob, and after receiving them Bob responds with the remaining n/2 messages.
+        for i in 1..NBR_DIFFERENT_RUNS + 1 {
+            let total_nbr_msgs = 100 * i;
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let start = SystemTime::now();
+            for msg_nbr in 0..total_nbr_msgs {
+                if msg_nbr < total_nbr_msgs / 2 {
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, message);
+                    let result = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
+                }
+                else {
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, message);
+                    let result = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext, header);
+                }
+            }
+            file.write(i.to_string().as_bytes());
+            file.write(b" ");
+            file.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes());
+            file.write_all(b"\n"); 
+        }
+
+        // Deferred unidirectional. Alice first sends n/2 messages to Bob but before he receives them, Bob sends n/2 messages to Alice.
+        for i in 1..NBR_DIFFERENT_RUNS + 1 {
+            let total_nbr_msgs = 100 * i;
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let mut counter = 0;
+
+            let mut alice_cts: Vec<Ciphertext> = Vec::new();
+            let mut alice_headers: Vec<Header> = Vec::new();
+
+            let mut bob_cts: Vec<Ciphertext> = Vec::new();
+            let mut bob_headers: Vec<Header> = Vec::new();
+
+            for msg_nbr in 0..total_nbr_msgs {
+                if msg_nbr < total_nbr_msgs / 2 {
+                    let start = SystemTime::now();
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, message);
+                    counter += SystemTime::now().duration_since(start).expect("bla").as_micros();
+                    alice_cts.push(ciphertext);
+                    alice_headers.push(header);
+                }
+                else {
+                    let start = SystemTime::now();
+                    let (ordinal, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, message);
+                    counter += SystemTime::now().duration_since(start).expect("bla").as_micros();
+                    bob_cts.push(ciphertext);
+                    bob_headers.push(header);
+                }
+            }
+
+            for (ciphertext, header) in alice_cts.iter().zip(alice_headers.iter()) {
+                let mut ct = (*ciphertext).clone();
+                let start = SystemTime::now();
+                let result = rrc_receive(&mut alice_state, &associated_data, &mut ct, *header);
+                counter += SystemTime::now().duration_since(start).expect("bla").as_micros();
+            }
+
+            for (ciphertext, header) in bob_cts.iter().zip(bob_headers.iter()) {
+                let mut ct = (*ciphertext).clone();
+                let start = SystemTime::now();
+                let result = rrc_receive(&mut bob_state, &associated_data, &mut ct, *header);
+                counter += SystemTime::now().duration_since(start).expect("bla").as_micros();
+            }
+
+            file.write(i.to_string().as_bytes());
+            file.write(b" ");
+            file.write(counter.to_string().as_bytes());
+            file.write_all(b"\n"); 
+        }
+
+
     }
 }
