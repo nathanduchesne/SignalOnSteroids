@@ -206,6 +206,7 @@ pub fn concat(ad: &[u8], header: Header) -> Vec<u8> {
 }
 
 #[allow(non_snake_case)]
+#[derive(Clone)]
 pub struct State {
     pub DHs: DiffieHellmanParameters,
     pub DHr: PublicKey,
