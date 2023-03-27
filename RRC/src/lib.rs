@@ -150,6 +150,7 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut C
     let (acc, num, pt) = receive(&mut state.state, &associated_data_prime, header, &ct.ciphertext);
     
     if !acc {
+        println!("Failed in RC receive already");
         return (false, num, Vec::new());
     }
     let mut hasher = Sha256::new();
@@ -440,6 +441,53 @@ mod tests {
         // Detect that we've received a forgery
         assert_eq!(result.0, false);
     }
+
+    #[test]
+    fn adversarial_example_detected_for_r_rid2() {
+        // Alice sends messages
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude? 1";
+        let plaintext2 = b"Wassup my dude? 2";
+
+        let mut ct1 = rrc_send(&mut alice_state, &associated_data, plaintext1);
+        let mut ct2 = rrc_send(&mut alice_state, &associated_data, plaintext2);
+
+        let mut incorrect_header = ct2.2.clone();
+        incorrect_header.msg_nbr -= 1;
+        let result = rrc_receive(&mut bob_state, &associated_data, &mut ct2.1, incorrect_header);
+        assert_eq!(result.0, false);
+        println!("{:?}", result.2);
+    }
+
+    #[test]
+    fn adversarial_example_detected_for_r_rid3() {
+        // If adversary corrupts whole state at given time, but Alice sends messages before adversary does.
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let associated_data = [0u8;32];
+        let plaintext1 = b"Wassup my dude? 1";
+        let plaintext2 = b"Wassup my dude? 2";
+
+        let mut ct1 = rrc_send(&mut alice_state, &associated_data, plaintext1);
+        let mut corrupted_state = alice_state.clone();
+        let mut ct2 = rrc_send(&mut alice_state, &associated_data, plaintext2);
+
+        // Alice sends another msg
+        let plaintext3 = b"Wassup my dude? 3";
+        let plaintext2_fake = b"I am malicious";
+        let mut ct3_real = rrc_send(&mut alice_state, &associated_data, plaintext3);
+        let mut ct2_fake = rrc_send(&mut corrupted_state, &associated_data, plaintext2_fake);
+
+        // Bob receives Alice's msg 3
+        let result = rrc_receive(&mut bob_state, &associated_data, &mut ct3_real.1, ct3_real.2);
+        assert_eq!(result.0, true);
+        assert_eq!(result.2, plaintext3.to_vec());
+        // Bob receives Eve's msg 2 from corrupted state
+        let corrupted_result = rrc_receive(&mut bob_state, &associated_data, &mut ct2_fake.1, ct2_fake.2);
+        assert_eq!(corrupted_result.0, false);
+    }
+
 
 
 
