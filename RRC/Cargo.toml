@@ -11,6 +11,8 @@ bytevec = "0.2.0"
 rc = { path = "../rc" }
 sha2 = "0.10.6"
 hex-literal = "0.3.4"
+rand = "0.8.5"
+blake2 = "0.10.6"
 
 [dev-dependencies]
 criterion = "0.4.0"

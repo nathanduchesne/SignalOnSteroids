@@ -6,9 +6,13 @@ use std::{collections::HashSet, num};
 use std::cmp::Ordering;
 use hex_literal::hex;
 use sha2::{Sha256, Sha512, Digest};
+use blake2::{Blake2b512, Blake2s256};
 use std::time::{SystemTime};
 use std::fs::{File};
 use std::io::prelude::*;
+use rand::{RngCore, CryptoRng};
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 
 
 use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
@@ -80,6 +84,12 @@ fn get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: [u8; 32]) -> [u8; 32] 
     let iterator = R_sorted.iter();
     hasher.update(hash_key_prime);  
     for message in iterator {
+        let usize_for_env = size_of::<usize>();
+        let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+        ordinal_as_bytes[0..usize_for_env].clone_from_slice(&message.ordinal.epoch.to_be_bytes());
+        ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&message.ordinal.index.to_be_bytes());
+        hasher.update(&ordinal_as_bytes);
+        hasher.update(&ordinal_as_bytes);
         hasher.update(&message.content);
     }
     // read hash digest and consume hasher
@@ -95,10 +105,10 @@ fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
     let mut hasher = Sha256::new();
     let iterator = R_sorted.iter();  
     let usize_for_env = size_of::<usize>();
-    let ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
     for ordinal in iterator {
-        ordinal.epoch.to_be_bytes().clone_from_slice(&ordinal_as_bytes[0..usize_for_env]);
-        ordinal.index.to_be_bytes().clone_from_slice(&ordinal_as_bytes[usize_for_env..2 * usize_for_env]);
+        ordinal_as_bytes[0..usize_for_env].clone_from_slice(&ordinal.epoch.to_be_bytes());
+        ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&ordinal.index.to_be_bytes());
         hasher.update(&ordinal_as_bytes);
     }
     return hasher.finalize().try_into().unwrap();
@@ -239,6 +249,122 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
     }
 }
 
+/* Generates a 256bit random nonce used for the incremental hash function
+ * Hash function 0 is SHA256, Hash function 1 is Blake2s256.
+ */
+fn generate_nonce() -> [u8; m / 8] {
+    let mut nonce = [0u8; m / 8];
+    let mut rng = StdRng::from_entropy();
+    rng.fill_bytes(&mut nonce);
+    return nonce;
+}
+
+
+const m: usize = 256;
+const m_bytes: usize = m / 8;
+/*
+ * Hash function 0 is SHA256, Hash function 1 is Blake2s256.
+ * Generates a triple [h, c, r] as stated in https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
+ * Implements the Mset-XOR-Hash.
+ */
+fn incremental_hash_fct_of_whole_set(R: HashSet<Message>, hash_key_prime: &[u8; 32]) -> [u8; 32 + 2 * m_bytes] {
+    let mut hash: [u8; 32 + 2 * m_bytes] = [0;32 + 2 * m_bytes];
+    let nonce = generate_nonce();
+    hash[32 + m_bytes..32 + 2 * m_bytes].clone_from_slice(&nonce);
+    
+    let mut hasher = Sha256::new();
+    hasher.update(&hash_key_prime);
+    hasher.update(&nonce);
+    let mut h: [u8;32] = hasher.finalize().try_into().unwrap();
+
+    // Order in which messages are iterated isn't relevant since xor is commutative.
+    for msg in R.iter() {
+        let mut hashed_msg = hash_msg_w_blake2(msg, &hash_key_prime);
+        let xored: Vec<u8> = h.iter().zip(hashed_msg.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+        h = xored.try_into().unwrap();
+    }
+
+    hash[0..32].clone_from_slice(&h);
+    let usize_for_env = size_of::<usize>();
+    let nbr_elems_in_R_bytes = (R.len() % m).to_be_bytes();
+    let mut correct_size_nbr_elems = [0; m_bytes];
+    // ????? is this really correct
+    correct_size_nbr_elems[m_bytes - usize_for_env..m_bytes].clone_from_slice(&nbr_elems_in_R_bytes);
+    hash[32..32 + m_bytes].clone_from_slice(&correct_size_nbr_elems);
+
+    return hash;
+}
+
+fn hash_msg_w_blake2(msg: &Message, hash_key_prime: &[u8; 32]) -> [u8;32] {
+    let mut hasher = Blake2s256::new();
+    hasher.update(&hash_key_prime);
+    let usize_for_env = size_of::<usize>();
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    ordinal_as_bytes[0..usize_for_env].clone_from_slice(&msg.ordinal.epoch.to_be_bytes());
+    ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&msg.ordinal.index.to_be_bytes());
+    hasher.update(&ordinal_as_bytes);
+    hasher.update(&ordinal_as_bytes);
+    hasher.update(&msg.content);
+    return hasher.finalize().try_into().unwrap();
+}
+
+//TODO: test hash fct of set, check if size of set is correctly added to second elem of tuple
+// test all of these
+// add this to protocol
+// benchmark to see how much faster send is
+
+/*Hash function 0 is SHA256, Hash function 1 is Blake2s256 */
+fn incremental_hash_sets_are_equal(hash1: [u8; 32 + 2 * m_bytes], hash2: [u8; 32 + 2 * m_bytes], hash_key_prime: &[u8; 32]) -> bool {
+    // define hash of H(0,r)
+    let mut hasher = Sha256::new();
+    hasher.update(&hash_key_prime);
+    hasher.update(&hash1[32 + m_bytes..32 + 2 * m_bytes]);
+    let h_0_r1: [u8; 32] = hasher.finalize().try_into().unwrap();
+    let xored1: Vec<u8> = h_0_r1.iter().zip(hash1[0..32].iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+
+    // define hash of H(0,r')
+    let mut hasher = Sha256::new();
+    hasher.update(&hash_key_prime);
+    hasher.update(&hash2[32 + m_bytes..32 + 2 * m_bytes]);
+    let h_0_r2: [u8; 32] = hasher.finalize().try_into().unwrap();
+    let xored2: Vec<u8> = h_0_r2.iter().zip(hash2[0..32].iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+    // check if hash1[h] xor hash_r == hash2[h] xor hash_r'
+    // check if hash1[c] == hash2[c]
+    return xored1 == xored2 && hash1[32..32 + m_bytes] == hash2[32..32 + m_bytes];
+}
+
+fn update_incremental_hash_set(incremental_hash: &mut [u8; 32 + 2 * m_bytes], msg: Message, hash_key_prime: &[u8; 32]) -> [u8; 32 + 2 * m_bytes] {
+    let mut new_hash: [u8; 32 + 2 * m_bytes] = [0; 32 + 2 * m_bytes];
+    // Update the first element in the tuple
+    let mut hasher = Sha256::new();
+    hasher.update(&hash_key_prime);
+    hasher.update(&incremental_hash[32 + m_bytes..32 + 2 * m_bytes]);
+    let h_0_r: [u8; 32] = hasher.finalize().try_into().unwrap();
+    let hash_without_nonce_hash: Vec<u8> = h_0_r.iter().zip(incremental_hash[0..32].iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect(); 
+    let msg_hash = hash_msg_w_blake2(&msg, hash_key_prime);
+    let new_h_without_xor_nonce: Vec<u8> = msg_hash.iter().zip(hash_without_nonce_hash.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+
+    // Update the second element (cardinality of set)
+    let usize_for_env = size_of::<usize>();
+    let mut cardinality_R: usize = usize::from_be_bytes(incremental_hash[32 + 2 * m_bytes - usize_for_env..32 + 2 * m_bytes].try_into().unwrap());
+    cardinality_R += 1;
+    let nbr_elems_in_R_bytes = (cardinality_R % m).to_be_bytes();
+    let mut correct_size_nbr_elems = [0; m_bytes];
+    correct_size_nbr_elems[m_bytes - usize_for_env..m_bytes].clone_from_slice(&nbr_elems_in_R_bytes);
+    new_hash[32..32 + m_bytes].clone_from_slice(&correct_size_nbr_elems);
+
+    let nonce = generate_nonce();
+    new_hash[32 + m_bytes..32 + 2 * m_bytes].clone_from_slice(&nonce);
+    hasher = Sha256::new();
+    hasher.update(hash_key_prime);
+    hasher.update(nonce);
+    let hash_nonce: [u8; 32] = hasher.finalize().try_into().unwrap();
+    let new_h: Vec<u8> = new_h_without_xor_nonce.iter().zip(hash_nonce.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+    new_hash[0..32].clone_from_slice(&new_h);
+
+    return [0;32+2*m_bytes]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +409,33 @@ mod tests {
     }
 
     #[test]
+    fn get_hash_of_set_of_msgs_fails_when_it_should() {
+        let mut first_set: HashSet<Message> = HashSet::new();
+        let mut second_set: HashSet<Message> = HashSet::new();
+
+        let first_msg = Message{content: [17;32], ordinal: Ordinal { epoch: 3, index: 17 }};
+        let second_msg = Message{content: [15; 32], ordinal: Ordinal { epoch: 3, index: 19 }};
+        let third_msg = Message{content: [244;32], ordinal: Ordinal { epoch: 5, index: 0 }};
+
+        first_set.insert(first_msg);
+        first_set.insert(second_msg);
+        first_set.insert(third_msg);
+
+        let first_msg = Message{content: [17; 32], ordinal: Ordinal { epoch: 3, index: 17 }};
+        let second_msg = Message{content: [15;32], ordinal: Ordinal { epoch: 3, index: 19 }};
+        let third_msg = Message{content: [244;32], ordinal: Ordinal { epoch: 5, index: 1 }};
+
+        second_set.insert(third_msg);
+        second_set.insert(first_msg);
+        second_set.insert(second_msg);
+
+        let hash_key_prime: [u8;32] = [0;32];
+
+        assert_ne!(get_hash_msg_set(&first_set, hash_key_prime), get_hash_msg_set(&second_set, hash_key_prime));
+        
+    }
+
+    #[test]
     fn get_hash_of_set_of_ordinals_works() {
         let mut first_set: HashSet<Ordinal> = HashSet::new();
         let mut second_set: HashSet<Ordinal> = HashSet::new();
@@ -302,8 +455,31 @@ mod tests {
         let hash_key_prime: [u8;32] = [0;32];
 
         assert_eq!(get_hash_ordinal_set(&first_set), get_hash_ordinal_set(&second_set));
-        
     }
+
+    #[test]
+    fn get_hash_of_set_of_ordinals_fails_when_it_should() {
+        let mut first_set: HashSet<Ordinal> = HashSet::new();
+        let mut second_set: HashSet<Ordinal> = HashSet::new();
+
+        let first_msg = Ordinal { epoch: 3, index: 17 };
+        let second_msg = Ordinal { epoch: 3, index: 19 };
+
+        first_set.insert(first_msg);
+        first_set.insert(second_msg);
+
+        let first_msg = Ordinal { epoch: 3, index: 18 };
+        let second_msg = Ordinal { epoch: 3, index: 19 };
+
+        second_set.insert(second_msg);
+        second_set.insert(first_msg);
+
+        let hash_key_prime: [u8;32] = [0;32];
+
+        assert_ne!(get_hash_ordinal_set(&first_set), get_hash_ordinal_set(&second_set));
+    }
+
+    
 
     #[test]
     fn ordinal_ordering_works() {
@@ -488,6 +664,27 @@ mod tests {
         assert_eq!(corrupted_result.0, false);
     }
 
+    #[test]
+    fn incremental_hash_of_msg_set_works() {
+        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
+        let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
+
+        let mut set1 = HashSet::new();
+        set1.insert(msg1.clone());
+        set1.insert(msg2.clone());
+        let hash_set1 = incremental_hash_fct_of_whole_set(set1, &alice_state.hash_key_prime);
+
+        let mut set2 = HashSet::new();
+        set2.insert(msg1);
+        set2.insert(msg2);
+        let hash_set2 = incremental_hash_fct_of_whole_set(set2, &alice_state.hash_key_prime);
+
+        assert_ne!(hash_set1, hash_set2);
+        assert_eq!(true, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
+
+    }
+
 
 
 
@@ -596,7 +793,5 @@ mod tests {
             file.write(counter.to_string().as_bytes());
             file.write_all(b"\n"); 
         }
-
-
     }
 }
