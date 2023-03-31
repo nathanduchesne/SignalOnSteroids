@@ -260,14 +260,14 @@ fn generate_nonce() -> [u8; m / 8] {
 }
 
 
-const m: usize = 256;
+const m: usize = 256 + 24; // We support 2^24 messages with hashes of 256 bits
 const m_bytes: usize = m / 8;
 /*
  * Hash function 0 is SHA256, Hash function 1 is Blake2s256.
  * Generates a triple [h, c, r] as stated in https://people.csail.mit.edu/devadas/pubs/mhashes.pdf
  * Implements the Mset-XOR-Hash.
  */
-fn incremental_hash_fct_of_whole_set(R: HashSet<Message>, hash_key_prime: &[u8; 32]) -> [u8; 32 + 2 * m_bytes] {
+fn incremental_hash_fct_of_whole_set(R: &HashSet<Message>, hash_key_prime: &[u8; 32]) -> [u8; 32 + 2 * m_bytes] {
     let mut hash: [u8; 32 + 2 * m_bytes] = [0;32 + 2 * m_bytes];
     let nonce = generate_nonce();
     hash[32 + m_bytes..32 + 2 * m_bytes].clone_from_slice(&nonce);
@@ -303,13 +303,11 @@ fn hash_msg_w_blake2(msg: &Message, hash_key_prime: &[u8; 32]) -> [u8;32] {
     ordinal_as_bytes[0..usize_for_env].clone_from_slice(&msg.ordinal.epoch.to_be_bytes());
     ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&msg.ordinal.index.to_be_bytes());
     hasher.update(&ordinal_as_bytes);
-    hasher.update(&ordinal_as_bytes);
     hasher.update(&msg.content);
     return hasher.finalize().try_into().unwrap();
 }
 
-//TODO: test hash fct of set, check if size of set is correctly added to second elem of tuple
-// test all of these
+//TODO:
 // add this to protocol
 // benchmark to see how much faster send is
 
@@ -346,7 +344,7 @@ fn update_incremental_hash_set(incremental_hash: &mut [u8; 32 + 2 * m_bytes], ms
 
     // Update the second element (cardinality of set)
     let usize_for_env = size_of::<usize>();
-    let mut cardinality_R: usize = usize::from_be_bytes(incremental_hash[32 + 2 * m_bytes - usize_for_env..32 + 2 * m_bytes].try_into().unwrap());
+    let mut cardinality_R: usize = usize::from_be_bytes(incremental_hash[32 + m_bytes - usize_for_env..32 + m_bytes].try_into().unwrap());
     cardinality_R += 1;
     let nbr_elems_in_R_bytes = (cardinality_R % m).to_be_bytes();
     let mut correct_size_nbr_elems = [0; m_bytes];
@@ -362,7 +360,7 @@ fn update_incremental_hash_set(incremental_hash: &mut [u8; 32 + 2 * m_bytes], ms
     let new_h: Vec<u8> = new_h_without_xor_nonce.iter().zip(hash_nonce.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
     new_hash[0..32].clone_from_slice(&new_h);
 
-    return [0;32+2*m_bytes]
+    return new_hash;
 }
 
 #[cfg(test)]
@@ -665,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn incremental_hash_of_msg_set_works() {
+    fn incremental_hash_of_msg_set_works_liveness() {
         let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
         let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
         let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
@@ -673,17 +671,71 @@ mod tests {
         let mut set1 = HashSet::new();
         set1.insert(msg1.clone());
         set1.insert(msg2.clone());
-        let hash_set1 = incremental_hash_fct_of_whole_set(set1, &alice_state.hash_key_prime);
+        let hash_set1 = incremental_hash_fct_of_whole_set(&set1, &alice_state.hash_key_prime);
 
         let mut set2 = HashSet::new();
         set2.insert(msg1);
         set2.insert(msg2);
-        let hash_set2 = incremental_hash_fct_of_whole_set(set2, &alice_state.hash_key_prime);
+        let hash_set2 = incremental_hash_fct_of_whole_set(&set2, &alice_state.hash_key_prime);
 
         assert_ne!(hash_set1, hash_set2);
         assert_eq!(true, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
-
     }
+
+    #[test]
+    fn incremental_hash_of_msg_set_works_safety() {
+        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
+        let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
+
+        let mut set1 = HashSet::new();
+        set1.insert(msg1.clone());
+        set1.insert(msg2.clone());
+        let mut hash_set1 = incremental_hash_fct_of_whole_set(&set1, &alice_state.hash_key_prime);
+
+        let mut set2 = HashSet::new();
+        set2.insert(msg1);
+        let msg3 = Message { ordinal: Ordinal { epoch: 17, index: 132 }, content: [0;32] };
+        set2.insert(msg3.clone());
+        let mut hash_set2 = incremental_hash_fct_of_whole_set(&set2, &alice_state.hash_key_prime);
+
+        assert_ne!(hash_set1, hash_set2);
+        assert_eq!(false, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
+
+        set2.remove(&msg3);
+        set2.insert(msg2);
+        hash_set2 = incremental_hash_fct_of_whole_set(&set2, &alice_state.hash_key_prime);
+        assert_ne!(hash_set1, hash_set2);
+        assert_eq!(true, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
+
+        set2.insert(msg3);
+        hash_set2 = incremental_hash_fct_of_whole_set(&set2, &alice_state.hash_key_prime);
+        assert_ne!(hash_set1, hash_set2);
+        assert_eq!(false, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
+    }
+
+    #[test]
+    fn adding_to_set_computes_correct_hash() {
+        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
+        let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
+
+        let mut set1 = HashSet::new();
+        set1.insert(msg1.clone());
+        set1.insert(msg2.clone());
+        let mut hash_set1 = incremental_hash_fct_of_whole_set(&set1, &alice_state.hash_key_prime);
+
+        let mut set2 = HashSet::new();
+        set2.insert(msg1);
+        let mut hash_set2 = incremental_hash_fct_of_whole_set(&set2, &alice_state.hash_key_prime);
+        assert_ne!(true, incremental_hash_sets_are_equal(hash_set1, hash_set2, &alice_state.hash_key_prime));
+        let new_hash_set2 = update_incremental_hash_set(&mut hash_set2, msg2, &alice_state.hash_key_prime);
+
+        assert_ne!(new_hash_set2, hash_set1);
+        assert_eq!(true, incremental_hash_sets_are_equal(hash_set1, new_hash_set2, &alice_state.hash_key_prime));
+    }
+
+
 
 
 
