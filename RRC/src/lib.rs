@@ -20,7 +20,7 @@ use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 use bytevec::{ByteEncodable, ByteDecodable};
 
 #[derive(Clone)]
-pub struct RRC_State {
+pub struct RrcState {
     pub state: State,
     pub hash_key: [u8;32],
     pub hash_key_prime: [u8;32], 
@@ -30,7 +30,7 @@ pub struct RRC_State {
     pub max_num: Ordinal,
     pub security_level: Security
 }
-pub fn rrc_init_all(security_level: Security) -> (RRC_State, RRC_State) {
+pub fn rrc_init_all(security_level: Security) -> (RrcState, RrcState) {
     // do key exchange for both hash keys
     let alice_hash_key = generate_dh();
     let alice_hash_key_prime = generate_dh(); 
@@ -40,8 +40,8 @@ pub fn rrc_init_all(security_level: Security) -> (RRC_State, RRC_State) {
     let hash_key = dh(alice_hash_key, bob_hash_key.public);
     let hash_key_prime = dh(alice_hash_key_prime, bob_hash_key_prime.public);
     let (mut alice_rc_state, mut bob_rc_state) = init_all();
-    let mut alice_state = RRC_State{state: alice_rc_state, hash_key: hash_key.to_bytes().clone(), hash_key_prime: hash_key_prime.to_bytes().clone(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level.clone()};
-    let mut bob_state = RRC_State{state: bob_rc_state, hash_key: hash_key.to_bytes(), hash_key_prime: hash_key_prime.to_bytes(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level};
+    let mut alice_state = RrcState{state: alice_rc_state, hash_key: hash_key.to_bytes().clone(), hash_key_prime: hash_key_prime.to_bytes().clone(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level.clone()};
+    let mut bob_state = RrcState{state: bob_rc_state, hash_key: hash_key.to_bytes(), hash_key_prime: hash_key_prime.to_bytes(), S: HashSet::new(), R: HashSet::new(), S_ack: HashSet::new(), max_num: Ordinal { epoch: 0, index: 0 }, security_level: security_level};
 
     return (alice_state, bob_state);
 }
@@ -116,7 +116,7 @@ fn get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8; 32] {
 }
 
 
-pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
+pub fn rrc_send(state: &mut RrcState, associated_data: &[u8; 32], plaintext: &[u8]) -> (Ordinal, Ciphertext, Header) {
     let mut nums_prime: HashSet<Ordinal> = HashSet::new();
     for msg in state.R.iter() {
         nums_prime.insert(msg.ordinal);
@@ -149,7 +149,7 @@ pub fn rrc_send(state: &mut RRC_State, associated_data: &[u8; 32], plaintext: &[
 
 }
 
-pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
+pub fn rrc_receive(state: &mut RrcState, associated_data: &[u8; 32], ct: &mut Ciphertext, header: Header) -> (bool, Ordinal, Vec<u8>) {
     let mut associated_data_prime: [u8; 128] = [0;128];
 
     associated_data_prime[0..32].clone_from_slice(associated_data);
@@ -189,16 +189,16 @@ pub fn rrc_receive(state: &mut RRC_State, associated_data: &[u8; 32], ct: &mut C
 
 #[derive(Clone, PartialEq)]
 pub enum Security {
-    r_RID,
-    s_RID,
-    r_RID_and_s_RID
+    RRid,
+    SRid,
+    RRidAndSRid
 }
 
-fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal) -> bool {
+fn checks(state: &mut RrcState, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal) -> bool {
     let mut s_bool: bool = false;
     let mut r_bool: bool = false;
 
-    if state.security_level != Security::r_RID {
+    if state.security_level != Security::RRid {
         let mut R_star: HashSet<Message> = HashSet::new();
         for num_prime in state.S.iter() {
             if ct.R.0.contains(&num_prime.ordinal) {
@@ -206,7 +206,7 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
             }
         }
         s_bool = get_hash_msg_set(&R_star, state.hash_key_prime) != ct.R.1;
-        if state.security_level == Security::s_RID {
+        if state.security_level == Security::SRid {
             return s_bool;
         }
     }
@@ -242,9 +242,9 @@ fn checks(state: &mut RRC_State, ct: &mut Ciphertext, h: &[u8; 32], num: Ordinal
 
     //println!("s_bool is {}, r_bool is {}", s_bool, r_bool);
     match state.security_level {
-        Security::r_RID => r_bool,
-        Security::r_RID_and_s_RID => r_bool || s_bool,
-        Security::s_RID => return s_bool
+        Security::RRid => r_bool,
+        Security::RRidAndSRid => r_bool || s_bool,
+        Security::SRid => return s_bool
         
     }
 }
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn send_and_receive_normal_functioning() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let mut associated_data = [0u8;32];
         let plaintext = b"Wassup my dude?";
         let (ordinal, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, plaintext);
@@ -512,7 +512,7 @@ mod tests {
 
     #[test]
     fn out_of_order_delivery() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let associated_data = [0u8;32];
         let plaintext1 = b"Wassup my dude?";
         let plaintext2 = b"Wassup my dude2?";
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn out_of_order_delivery_both_send() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let associated_data = [0u8;32];
         let plaintext1 = b"Wassup my dude?";
         let plaintext2 = b"Wassup my dude2?";
@@ -581,7 +581,7 @@ mod tests {
 
     #[test]
     fn adversarial_example_is_detected_for_s_rid() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let mut eve_state = alice_state.clone();
 
         let associated_data = [0u8;32];
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn adversarial_example_is_detected_for_r_rid() {
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let mut eve_state = alice_state.clone();
 
         let associated_data = [0u8;32];
@@ -619,7 +619,7 @@ mod tests {
     #[test]
     fn adversarial_example_detected_for_r_rid2() {
         // Alice sends messages
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
 
         let associated_data = [0u8;32];
         let plaintext1 = b"Wassup my dude? 1";
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn adversarial_example_detected_for_r_rid3() {
         // If adversary corrupts whole state at given time, but Alice sends messages before adversary does.
-        let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
         let associated_data = [0u8;32];
         let plaintext1 = b"Wassup my dude? 1";
         let plaintext2 = b"Wassup my dude? 2";
@@ -664,7 +664,7 @@ mod tests {
 
     #[test]
     fn incremental_hash_of_msg_set_works_liveness() {
-        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (alice_state, bob_state) = rrc_init_all(Security::RRidAndSRid);
         let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
         let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
 
@@ -684,7 +684,7 @@ mod tests {
 
     #[test]
     fn incremental_hash_of_msg_set_works_safety() {
-        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (alice_state, bob_state) = rrc_init_all(Security::RRidAndSRid);
         let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
         let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
 
@@ -716,7 +716,7 @@ mod tests {
 
     #[test]
     fn adding_to_set_computes_correct_hash() {
-        let (alice_state, bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+        let (alice_state, bob_state) = rrc_init_all(Security::RRidAndSRid);
         let msg1 = Message{ordinal: Ordinal { epoch: 1, index: 1 }, content: [17;32]};
         let msg2 = Message{ordinal: Ordinal { epoch: 1, index: 2 }, content: [19;32]};
 
@@ -758,7 +758,7 @@ mod tests {
         // Alice sends the even-numbered messages and Bob sends the odd-numbered messages.
         for i in 1..NBR_DIFFERENT_RUNS + 1 {
             let total_nbr_msgs = 100 * i;
-            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
             let start = SystemTime::now();
             for msg_nbr in 0..total_nbr_msgs {
                 if msg_nbr % 2 == 0 {
@@ -779,7 +779,7 @@ mod tests {
         // Unidirectional. Alice first sends n/2 messages to Bob, and after receiving them Bob responds with the remaining n/2 messages.
         for i in 1..NBR_DIFFERENT_RUNS + 1 {
             let total_nbr_msgs = 100 * i;
-            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
             let start = SystemTime::now();
             for msg_nbr in 0..total_nbr_msgs {
                 if msg_nbr < total_nbr_msgs / 2 {
@@ -800,7 +800,7 @@ mod tests {
         // Deferred unidirectional. Alice first sends n/2 messages to Bob but before he receives them, Bob sends n/2 messages to Alice.
         for i in 1..NBR_DIFFERENT_RUNS + 1 {
             let total_nbr_msgs = 100 * i;
-            let (mut alice_state, mut bob_state) = rrc_init_all(Security::r_RID_and_s_RID);
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
             let mut counter = 0;
 
             let mut alice_cts: Vec<Ciphertext> = Vec::new();

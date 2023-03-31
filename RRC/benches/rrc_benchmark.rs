@@ -1,14 +1,14 @@
 use std::time::SystemTime;
 
 use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use rrc::{rrc_init_all, RRC_State, rrc_send, rrc_receive};
+use rrc::{rrc_init_all, RrcState, rrc_send, rrc_receive};
 use std::fs::{File};
 use std::io::prelude::*;
 
 fn init_all_benchmark(c: &mut Criterion) {
     c.bench_function(
         "Initialize states ", 
-        |b| b.iter(|| rrc_init_all(rrc::Security::r_RID_and_s_RID))
+        |b| b.iter(|| rrc_init_all(rrc::Security::RRidAndSRid))
     );
 }
 
@@ -16,8 +16,8 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
     let plaintext = black_box(
         *b"J'ai mis cerbere en enfer."
     );
-    let mut alice_state: RRC_State;
-    alice_state = black_box(rrc_init_all(rrc::Security::r_RID_and_s_RID).0);
+    let mut alice_state: RrcState;
+    alice_state = black_box(rrc_init_all(rrc::Security::RRidAndSRid).0);
 
     let mut associated_data = black_box(
         [0;32]
@@ -38,9 +38,9 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let plaintext = black_box(
             *b"J'ai mis cerbere en enfer."
         );
-        let mut alice_state: RRC_State;
-        let mut bob_state: RRC_State;
-        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::r_RID_and_s_RID));
+        let mut alice_state: RrcState;
+        let mut bob_state: RrcState;
+        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::RRidAndSRid));
         let mut associated_data = black_box(  [0;32]);  
  
         let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_receive_alice_spams_bob.txt").expect("bla");
@@ -61,9 +61,9 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let plaintext = black_box(
             *b"J'ai mis cerbere en enfer."
         );
-        let mut alice_state: RRC_State;
-        let mut bob_state: RRC_State;
-        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::r_RID_and_s_RID));
+        let mut alice_state: RrcState;
+        let mut bob_state: RrcState;
+        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::RRidAndSRid));
         let mut associated_data = black_box(  [0;32]);  
  
         let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_receive_alice_and_bob_back_and_forth.txt").expect("bla");
@@ -86,9 +86,9 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let plaintext = black_box(
             *b"J'ai mis cerbere en enfer."
         );
-        let mut alice_state: RRC_State;
-        let mut bob_state: RRC_State;
-        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::r_RID_and_s_RID));
+        let mut alice_state: RrcState;
+        let mut bob_state: RrcState;
+        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::RRidAndSRid));
         let mut associated_data = black_box(  [0;32]);  
  
         let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_send_alice_and_bob_back_and_forth.txt").expect("bla");
@@ -111,9 +111,9 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let plaintext = black_box(
             *b"J'ai mis cerbere en enfer."
         );
-        let mut alice_state: RRC_State;
-        let mut bob_state: RRC_State;
-        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::s_RID));
+        let mut alice_state: RrcState;
+        let mut bob_state: RrcState;
+        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::SRid));
         let mut associated_data = black_box(  [0;32]);  
  
         let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_receive_alice_and_bob_back_and_forth_s_rid.txt").expect("bla");
@@ -136,9 +136,9 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
         let plaintext = black_box(
             *b"J'ai mis cerbere en enfer."
         );
-        let mut alice_state: RRC_State;
-        let mut bob_state: RRC_State;
-        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::r_RID));
+        let mut alice_state: RrcState;
+        let mut bob_state: RrcState;
+        (alice_state, bob_state) = black_box(rrc_init_all(rrc::Security::RRid));
         let mut associated_data = black_box(  [0;32]);  
  
         let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_receive_alice_and_bob_back_and_forth_r_rid.txt").expect("bla");
