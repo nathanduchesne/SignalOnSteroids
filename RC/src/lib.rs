@@ -357,7 +357,7 @@ pub struct Ordinal {
 
 pub fn send(state: &mut State, associated_data: &[u8], plaintext: &[u8]) -> (Ordinal, Header, Vec<u8>) {
     let (header, ciphertext) = ratchet_encrypt(state, plaintext, associated_data);
-    return (Ordinal{epoch: state.epoch, index: header.msg_nbr}, header, ciphertext)
+    return (Ordinal{epoch: header.epoch, index: header.msg_nbr}, header, ciphertext)
 }
 
 pub fn receive(state: &mut State, associated_data: &[u8], header: Header, ciphertext: &[u8]) -> (bool, Ordinal, Vec<u8>) {

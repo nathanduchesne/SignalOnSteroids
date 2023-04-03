@@ -137,7 +137,7 @@ fn optimized_send_back_and_forth(c: &mut Criterion) {
         (alice_state, bob_state) = black_box(rrc_init_all_optimized_send(rrc::Security::RRidAndSRid));
         let mut associated_data = black_box(  [0;32]);  
  
-        let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_optimized_receive_back_and_forthtxt").expect("bla");
+        let mut file = File::create("../../../Report/Plots/BenchLogs/rrc_optimized_receive_back_and_forth.txt").expect("bla");
 
         c.bench_function(
             "Ratchet receive ", 

@@ -42,7 +42,7 @@ pub struct OptimizedSendRrcState {
     pub incremental_hash: [u8; 32 + 2 * m_bytes],
     pub hash_S: [u8;32],
     pub hash_ordinal_set: [u8;32],
-    pub nums_prime: HashSet<Ordinal>
+    pub nums_prime: HashSet<Ordinal>,
 }
 
 pub fn rrc_init_all(security_level: Security) -> (RrcState, RrcState) {
@@ -123,11 +123,46 @@ fn opti_get_hash_msg_set(R: &HashSet<Message>, hash_key_prime: &[u8; 32]) -> [u8
     let iterator = R_sorted.iter();
     let mut result: [u8;32] = [0;32];
     for message in iterator {
-        println!("in heeeere");
-        println!("message has ordinal{}:{}", message.ordinal.epoch, message.ordinal.index);
         let msg_hash: Vec<u8> = result.iter().zip(hash_msg_w_blake2(&message, hash_key_prime).iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
         result.clone_from_slice(&msg_hash);
     }
+    return result;
+}
+
+fn opti_get_hash_ordinal_set(R: &HashSet<Ordinal>) -> [u8;32] {
+    let mut R_sorted : BTreeSet<Ordinal> = BTreeSet::new();
+    for ordinal in R.iter() {
+        R_sorted.insert(ordinal.clone());
+    }
+    let iterator = R_sorted.iter();  
+    let usize_for_env = size_of::<usize>();
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    let mut result: [u8;32] = [0;32];
+
+    for ordinal in iterator {
+        let mut hasher = Blake2s256::new();
+        ordinal_as_bytes[0..usize_for_env].clone_from_slice(&ordinal.epoch.to_be_bytes());
+        ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&ordinal.index.to_be_bytes());
+        hasher.update(&ordinal_as_bytes);
+        let ord_hash: [u8;32] = hasher.finalize().try_into().unwrap();
+        let new_hash: Vec<u8> = ord_hash.iter().zip(result.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+        result.clone_from_slice(&new_hash);
+    }
+
+    return result;
+}
+
+fn updated_ordinal_hash(ord: &Ordinal, prev_hash: &[u8;32]) -> [u8;32] {
+    let mut result: [u8;32] = [0;32];
+    let usize_for_env = size_of::<usize>();
+    let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
+    let mut hasher = Blake2s256::new();
+    ordinal_as_bytes[0..usize_for_env].clone_from_slice(&ord.epoch.to_be_bytes());
+    ordinal_as_bytes[usize_for_env..2 * usize_for_env].clone_from_slice(&ord.index.to_be_bytes());
+    hasher.update(&ordinal_as_bytes);
+    let ord_hash: [u8;32] = hasher.finalize().try_into().unwrap();
+    let new_hash: Vec<u8> = ord_hash.iter().zip(prev_hash.iter()).map(|(&byte1, &byte2)| byte1 ^ byte2).collect();
+    result.clone_from_slice(&new_hash);
     return result;
 }
 
@@ -442,21 +477,18 @@ fn update_incremental_hash_set(incremental_hash: &mut [u8; 32 + 2 * m_bytes], ms
 }
 
 pub fn optimized_rrc_send(state: &mut OptimizedSendRrcState, associated_data: &[u8; 32], plaintext: &[u8]) -> (Ordinal, OptimizedSendCiphertext, Header) {
-    let mut nums_prime: HashSet<Ordinal> = HashSet::new();
-    for msg in state.state.R.iter() {
-        nums_prime.insert(msg.ordinal);
-    }
-    let R_prime: (HashSet<Ordinal>, [u8; 32 + 2 * m_bytes]) = (nums_prime.clone(), state.incremental_hash);
+    let R_prime: (HashSet<Ordinal>, [u8; 32 + 2 * m_bytes]) = (state.nums_prime.clone(), state.incremental_hash);
     let mut associated_data_prime: [u8; 128 + 2 * m_bytes] = [0;128 + 2 * m_bytes];
     associated_data_prime[0..32].clone_from_slice(associated_data);
     //associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&state.state.S, [0;32]));
     associated_data_prime[32..64].clone_from_slice(&state.hash_S);
-    associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&R_prime.0));
+    //associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&R_prime.0));
+    associated_data_prime[64..96].clone_from_slice(&state.hash_ordinal_set);
     associated_data_prime[96..128 + 2 * m_bytes].clone_from_slice(&R_prime.1);
 
 
     let sent: (Ordinal, Header, Vec<u8>) = send(&mut state.state.state, &associated_data_prime, plaintext);
-    let ciphertext: OptimizedSendCiphertext = OptimizedSendCiphertext { ciphertext: sent.2, S: state.state.S.clone(), R: (nums_prime.clone(), R_prime.1.clone())};
+    let ciphertext: OptimizedSendCiphertext = OptimizedSendCiphertext { ciphertext: sent.2, S: state.state.S.clone(), R: (state.nums_prime.clone(), R_prime.1.clone())};
 
     let mut hasher = Sha256::new();
     hasher.update(&state.state.hash_key);
@@ -468,7 +500,8 @@ pub fn optimized_rrc_send(state: &mut OptimizedSendRrcState, associated_data: &[
     hasher.update(&ciphertext.ciphertext);
     //hasher.update(get_hash_msg_set(&ciphertext.S, [0;32]));
     hasher.update(&state.hash_S);
-    hasher.update(get_hash_ordinal_set(&ciphertext.R.0));
+    hasher.update(state.hash_ordinal_set);
+    //hasher.update(get_hash_ordinal_set(&ciphertext.R.0));
     hasher.update(&ciphertext.R.1);
     let h: [u8;32] = hasher.finalize().try_into().unwrap();
 
@@ -490,7 +523,8 @@ pub fn optimized_rrc_receive(state: &mut OptimizedSendRrcState, associated_data:
     associated_data_prime[0..32].clone_from_slice(associated_data);
     //associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&ct.S, [0;32]));
     associated_data_prime[32..64].clone_from_slice(&hash_sent_ct);
-    associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&ct.R.0));
+    //associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&ct.R.0));
+    associated_data_prime[64..96].clone_from_slice(&opti_get_hash_ordinal_set(&ct.R.0));
     associated_data_prime[96..128 + 2 * m_bytes].clone_from_slice(&ct.R.1);
 
     let (acc, num, pt) = receive(&mut state.state.state, &associated_data_prime, header, &ct.ciphertext);
@@ -509,7 +543,8 @@ pub fn optimized_rrc_receive(state: &mut OptimizedSendRrcState, associated_data:
     hasher.update(&ct.ciphertext);
     //hasher.update(get_hash_msg_set(&ct.S, [0;32]));
     hasher.update(&hash_sent_ct);
-    hasher.update(get_hash_ordinal_set(&ct.R.0));
+    hasher.update(opti_get_hash_ordinal_set(&ct.R.0));
+    //hasher.update(get_hash_ordinal_set(&ct.R.0));
     hasher.update(&ct.R.1);
     let h: [u8;32] = hasher.finalize().try_into().unwrap();
     if optimized_checks(&mut state.state, ct, &h, num) {
@@ -519,6 +554,8 @@ pub fn optimized_rrc_receive(state: &mut OptimizedSendRrcState, associated_data:
 
     let msg = Message { ordinal: num, content: h };
     state.state.R.insert(msg.clone());
+    state.nums_prime.insert(msg.ordinal.clone());
+    state.hash_ordinal_set = updated_ordinal_hash(&msg.ordinal.clone(), &state.hash_ordinal_set);
     state.incremental_hash = update_incremental_hash_set(&mut state.incremental_hash, msg, &state.state.hash_key_prime);
     //state.S_ack.insert(Message { ordinal:Ordinal { epoch: header.epoch, index: header.msg_nbr }, content: h });
     let _ = &ct.S.iter().for_each(|elem| { state.state.S_ack.insert(elem.clone());});
