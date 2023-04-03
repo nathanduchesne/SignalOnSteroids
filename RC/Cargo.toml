@@ -18,6 +18,7 @@ cipher = "0.4.2"
 block-padding = "0.3.2"
 ccm = "0.5.0"
 zeroize = "1.5.7"
+bytevec = "0.2.0"
 
 [dev-dependencies]
 criterion = "0.4.0"

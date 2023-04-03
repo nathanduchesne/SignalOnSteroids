@@ -9,6 +9,9 @@ use hmac::{Hmac, Mac};
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use zeroize::Zeroize;
 use std::time::{SystemTime};
+#[macro_use]
+extern crate bytevec;
+use bytevec::{ByteEncodable, ByteDecodable};
 
 
 
