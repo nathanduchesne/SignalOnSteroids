@@ -1,3 +1,0 @@
-cargo:rerun-if-changed=build/main.rs
-cargo:rustc-env=TYPENUM_BUILD_CONSTS=/Users/nathan/Desktop/EPFL/MA2/Project/Implementation/rc/mset-mu-hash/target/debug/build/typenum-284339e0f387734a/out/consts.rs
-cargo:rustc-env=TYPENUM_BUILD_OP=/Users/nathan/Desktop/EPFL/MA2/Project/Implementation/rc/mset-mu-hash/target/debug/build/typenum-284339e0f387734a/out/op.rs
