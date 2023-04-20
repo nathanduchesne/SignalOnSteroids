@@ -1,0 +1,12 @@
+[package]
+name = "mset-mu-hash"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+digest = "0.10.6"
+curve25519-dalek = {version = "4.0.0-rc.2", features = ["digest"]}
+[dev-dependencies]
+sha2 = "0.10.6"
