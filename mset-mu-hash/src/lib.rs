@@ -1,3 +1,5 @@
+// Credits go to @cronokirby for heavily inspring this crate based on this blog: https://cronokirby.com/posts/2021/07/on_multi_set_hashing/
+
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use digest::{
     consts::U64,
@@ -7,17 +9,12 @@ use digest::{
 
 pub struct RistrettoHash<H> {
     hash: H,
-    // This flag will get set after we call update, and indicates that
-    // we need to finish that update with an explicit call to `end_update`.
     updating: bool,
     acc: RistrettoPoint,
 }
 
 impl<H: Digest<OutputSize = U64> + Default> RistrettoHash<H> {
-    /// This function adds a complete object to the hash.
-    ///
-    /// This function takes a multiplicity, which is equivalent to calling the function
-    /// multiple times, but is much more efficient.
+    /// This function updates the multiset-hash with the given byte element multiplicity number of times.
     pub fn add(&mut self, data: impl AsRef<[u8]>, multiplicity: u64) {
         if self.updating {
             panic!("add called before end_update");
@@ -41,6 +38,7 @@ impl<H: Digest<OutputSize = U64> + Default> RistrettoHash<H> {
         self.acc += Scalar::from(multiplicity) * h_point;
     }
 
+    /// Returns the hash corresponding to the multi-set hash of the RistrettoHash object.
     pub fn finalize(self) -> [u8; 32] {
         let mut out: [u8;32] = [0; 32];
         out.copy_from_slice(&self.acc.compress().as_bytes()[..]);
