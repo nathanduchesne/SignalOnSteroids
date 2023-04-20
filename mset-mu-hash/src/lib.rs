@@ -1,4 +1,4 @@
-// Credits go to @cronokirby for heavily inspring this crate based on this blog: https://cronokirby.com/posts/2021/07/on_multi_set_hashing/
+// Credits go to @cronokirby for heavily inspiring this crate based on this blog: https://cronokirby.com/posts/2021/07/on_multi_set_hashing/
 
 use curve25519_dalek::{ristretto::RistrettoPoint, scalar::Scalar};
 use digest::{
