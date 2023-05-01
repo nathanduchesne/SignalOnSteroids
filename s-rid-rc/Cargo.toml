@@ -1,0 +1,13 @@
+[package]
+name = "s-rid-rc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+rc = { path = "../rc" }
+rrc = { path = "../rrc"}
+mset-mu-hash = { path = "../mset-mu-hash"}
+sha2 = "0.10.6"
+
