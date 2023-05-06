@@ -19,7 +19,7 @@ pub struct SRidState {
     pub acked_epoch: usize,
     pub nums_prime: HashSet<Ordinal>,
     pub incremental_hash: RistrettoHash<Sha512>,
-    pub hash_ordinal_set: RistrettoHash<Sha512>,
+    pub hash_ordinal_set: RistrettoHash<Sha512>
 }
 
 #[derive(Clone)]
@@ -156,10 +156,21 @@ pub fn s_rid_rc_receive(state: &mut SRidState, associated_data: &[u8; 32], ct: O
     }
 
     if state.epoch == state.acked_epoch + 4 {
-        // TODO: reset the incremental hash when updating the received sets
+        // Update the received sets
         state.r = state.fresh_r.clone();
         state.fresh_r.clear();
         state.acked_epoch = state.acked_epoch + 4;
+
+        // Update ordinals of received, and hash of ordinal set
+        state.nums_prime.clear();
+        state.hash_ordinal_set = RistrettoHash::<Sha512>::default();
+        state.incremental_hash = RistrettoHash::<Sha512>::default();
+        state.incremental_hash.add(state.hash_key_prime, 1);
+        for msg in state.r.clone().iter() {
+            update_ordinal_set_hash(state, msg.ordinal.clone());
+            update_receive_hashed(state, msg.clone());
+            state.nums_prime.insert(msg.ordinal);
+        }
     }
 
     return (true, num, pt);
@@ -196,8 +207,6 @@ fn update_ordinal_set_hash(state: &mut SRidState, ordinal: Ordinal) -> () {
 }
 
 
-//TODO: add elements to nums_prime in state in s_rid_rc_receive
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -233,5 +242,54 @@ mod tests {
         assert_eq!(acc, true);
         assert_eq!(pt, plaintext_bob);
 
+    }
+
+    #[test]
+    fn two_round_trip_epochs_works() {
+        let (mut alice_state, mut bob_state) = s_rid_rc_init();
+        let associated_data: [u8; 32] = [0;32];
+
+        for i in 0..10 {
+            // Alice sends
+            let plaintext_alice = b"Hello I am Alice";
+            let (mut num, mut ct) = s_rid_rc_send(&mut alice_state, &associated_data, plaintext_alice);
+            // Bob receives
+            let (mut acc, mut num, mut pt) = s_rid_rc_receive(&mut bob_state, &associated_data, ct);
+            assert_eq!(acc, true);
+            assert_eq!(pt, plaintext_alice);
+            // Bob sends
+            let plaintext_bob = b"Hello Alice, pleasure to meet you, I am Bobathan";
+            let (num2, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
+            // Alice receives
+            (acc, num, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
+            assert_eq!(acc, true);
+            assert_eq!(pt, plaintext_bob);
+        }
+    }
+
+
+    #[test]
+    fn adversary_with_forged_msg_is_detected() {
+        let (mut alice_state, mut bob_state) = s_rid_rc_init();
+        let associated_data: [u8; 32] = [0;32];
+        // Alice's state is compromised by Eve
+        let mut eve_state = alice_state.clone();
+        let plaintext_eve = b"Hello I am Alxce";
+        let (mut num_eve, mut ct_eve) = s_rid_rc_send(&mut eve_state, &associated_data, plaintext_eve);
+
+        let plaintext_alice = b"Hello I am Alice";
+        let (mut num, mut ct) = s_rid_rc_send(&mut alice_state, &associated_data, plaintext_alice);
+
+        let (mut acc, mut num, mut pt) = s_rid_rc_receive(&mut bob_state, &associated_data, ct_eve);
+        assert_eq!(acc, true);
+        assert_eq!(pt, plaintext_eve);
+
+        let plaintext_bob = b"Hello Alxce, pleasure to meet you, I am Bobathan";
+        let (num2, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
+
+        // Alice detects that a forgery was created in her name
+        (acc, num, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
+        assert_eq!(acc, false);
+        assert_eq!(pt, Vec::new());
     }
 }

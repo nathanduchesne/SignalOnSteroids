@@ -33,9 +33,6 @@ pub struct RrcState {
 }
 
 
-impl RrcState {
-
-}
 
 #[derive(Clone)]
 pub struct OptimizedSendRrcState {

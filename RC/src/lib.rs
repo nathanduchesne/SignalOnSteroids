@@ -125,7 +125,6 @@ pub fn encrypt(mk: &MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec
     let ciphertext = Aes256CbcEnc::new(&encryption_key.into(), &iv.into())
     .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
     
-
     // HMAC is calculated using the authentication key and the same hash function as above [2]. The HMAC input is the associated_data prepended to the ciphertext. 
     // The HMAC output is appended to the ciphertext.
     let mut hmac = HmacSha256::new_from_slice(&auth_key)
@@ -136,9 +135,9 @@ pub fn encrypt(mk: &MessageKey, plaintext: &[u8], associated_data: &[u8]) -> Vec
 
     let hmac_output: [u8; 32] = hmac.finalize().into_bytes().as_slice().try_into().expect("Length should be 32 bytes.");
 
+
     let mut ciphertext_with_hmac = ciphertext.to_vec();
     ciphertext_with_hmac.extend_from_slice(&hmac_output);
-
     return ciphertext_with_hmac;
 }
 

@@ -6,7 +6,7 @@ use digest::{
     Digest, Reset, Update
 };
 
-
+#[derive(Clone)]
 pub struct RistrettoHash<H> {
     hash: H,
     updating: bool,
