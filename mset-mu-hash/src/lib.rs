@@ -77,9 +77,17 @@ impl<H: Digest<OutputSize = U64> + Default + Reset> Reset for RistrettoHash<H> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use super::*;
     use sha2::Sha512;
 
+    #[test]
+    fn benchmark_init() {
+        let start = SystemTime::now();
+        let mut hash = RistrettoHash::<Sha512>::default();
+        println!("Init of hash takes {}", SystemTime::now().duration_since(start).expect("bla").as_micros().to_string());
+    }
 
     #[test]
     fn implementation_has_safety() {
