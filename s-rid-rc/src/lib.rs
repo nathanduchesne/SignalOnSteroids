@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::SystemTime};
 
 use mset_mu_hash::RistrettoHash;
 use rc::{State, Ordinal, init_all, generate_dh, dh, send, Header, receive};
@@ -120,14 +120,18 @@ pub fn checks(state: &SRidState, ct: &OptimizedSendCiphertext, h: &[u8; 32], num
 
 pub fn s_rid_rc_receive(state: &mut SRidState, associated_data: &[u8; 32], ct: OptimizedSendCiphertext) -> (bool, Ordinal, Vec<u8>) {
     let mut associated_data_prime: [u8; 96] = [0; 96];
+    //let start = SystemTime::now();
+    let ordinal_hash = get_ordinal_set_hash(&ct.r_prime.0);
+    //println!("Calculating hash takes {}", SystemTime::now().duration_since(start).expect("bla").as_micros());
     associated_data_prime[0..32].clone_from_slice(associated_data);
-    associated_data_prime[32..64].clone_from_slice(&get_ordinal_set_hash(&ct.r_prime.0));
+    associated_data_prime[32..64].clone_from_slice(&ordinal_hash);
     associated_data_prime[64..96].clone_from_slice(&ct.r_prime.1);
 
     let (acc, num, pt) = receive(&mut state.state, &associated_data_prime, ct.header, &ct.ciphertext);
     if !acc {
         return (false, Ordinal{epoch: 0, index: 0}, Vec::new());
     }
+    //let sha_start = SystemTime::now();
     let mut hasher = Sha256::new();
     hasher.update(&state.hash_key);
     let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
@@ -137,25 +141,35 @@ pub fn s_rid_rc_receive(state: &mut SRidState, associated_data: &[u8; 32], ct: O
     hasher.update(associated_data);
     hasher.update(&ct.ciphertext);
     hasher.update(&ct.epoch.to_be_bytes());
-    hasher.update(get_ordinal_set_hash(&ct.r_prime.0));
+    hasher.update(ordinal_hash);
     hasher.update(ct.r_prime.1);
     let h: [u8;32] = hasher.finalize().try_into().unwrap();
 
+    //println!("Sha hash takes {}", SystemTime::now().duration_since(sha_start).expect("bla").as_micros());
+
+    //let check_start = SystemTime::now();
     if checks(&state, &ct, &h, num) {
         return (false, Ordinal{epoch: 0, index: 0}, Vec::new()); 
     }
+    //println!("Checks {}", SystemTime::now().duration_since(check_start).expect("bla").as_micros());
 
+
+    //let hash_updates = SystemTime::now();
     state.r.insert(Message { ordinal: num.clone(), content: h });
     state.nums_prime.insert(num.clone());
+    //println!("Received {} messages", state.r.len());
     update_receive_hashed(state, Message { ordinal: num.clone(), content: h });
     update_ordinal_set_hash(state, num.clone());
     state.fresh_r.insert(Message { ordinal: num.clone(), content: h });
+    //println!("Inserts and updates {}", SystemTime::now().duration_since(hash_updates).expect("bla").as_micros());
+
 
     if ct.epoch == state.epoch + 1 {
         state.epoch = state.epoch + 2;
     }
 
     if state.epoch == state.acked_epoch + 4 {
+        //let start = SystemTime::now();
         // Update the received sets
         state.r = state.fresh_r.clone();
         state.fresh_r.clear();
@@ -166,17 +180,23 @@ pub fn s_rid_rc_receive(state: &mut SRidState, associated_data: &[u8; 32], ct: O
         state.hash_ordinal_set = RistrettoHash::<Sha512>::default();
         state.incremental_hash = RistrettoHash::<Sha512>::default();
         state.incremental_hash.add(state.hash_key_prime, 1);
+        //let hash_start = SystemTime::now();
+
+        // TODO: update fresh_r hash at every receive, such that when resetting r's hash, juste take fresh_r's acc.
         for msg in state.r.clone().iter() {
             update_ordinal_set_hash(state, msg.ordinal.clone());
             update_receive_hashed(state, msg.clone());
             state.nums_prime.insert(msg.ordinal);
         }
+        //println!("Hash reset {} in micro", SystemTime::now().duration_since(hash_start).expect("bla").as_micros().to_string());
+        //println!("Time in epoch reset {} in micro", SystemTime::now().duration_since(start).expect("bla").as_micros().to_string());
     }
 
     return (true, num, pt);
 }
 
 fn get_ordinal_set_hash(ordinal_set: &HashSet<Ordinal>) -> [u8; 32] {
+    //println!("Ordinal set for hash has {} elems", ordinal_set.len());
     let usize_for_env = size_of::<usize>();
     let mut ordinal_as_bytes = [0u8; 2 * size_of::<usize>()];
     let mut multiset_hash = RistrettoHash::<Sha512>::default();
@@ -209,6 +229,8 @@ fn update_ordinal_set_hash(state: &mut SRidState, ordinal: Ordinal) -> () {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, time::SystemTime, io::Write};
+
     use super::*;
     #[test]
     fn test_w_rust_sets_for_fresh_r_into_r() {
@@ -291,5 +313,49 @@ mod tests {
         (acc, num, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
         assert_eq!(acc, false);
         assert_eq!(pt, Vec::new());
+    }
+
+    #[test]
+    fn benchmark_receive_and_send_times() {
+        let (mut alice_state, mut bob_state) = s_rid_rc_init();
+        let associated_data: [u8; 32] = [0;32];
+
+        let plaintext_alice = b"Hello I am Alice";
+        let plaintext_bob = b"Hello I am Bobby";
+
+        let mut file_receive = File::create("../../../Report/Plots/BenchLogs/s_rid_rc_receive_alice_and_bob_back_and_forth.txt").expect("bla");
+        let mut file_send = File::create("../../../Report/Plots/BenchLogs/s_rid_rc_send_alice_and_bob_back_and_forth.txt").expect("bla");
+
+        // For multiple rounds
+        for _ in 0..12 {
+            // Alice sends loads of messages
+            for _ in 0..250 {
+                let send_start = SystemTime::now();
+                let (_, ct) = s_rid_rc_send(&mut alice_state, &associated_data, plaintext_alice);
+                file_send.write(SystemTime::now().duration_since(send_start).expect("bla").as_micros().to_string().as_bytes());
+                file_send.write_all(b"\n");
+                let receive_start = SystemTime::now();
+                let (acc, _, pt) = s_rid_rc_receive(&mut bob_state, &associated_data, ct);
+                file_receive.write(SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string().as_bytes());
+                println!("Receive time is {}", SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string());
+                file_receive.write_all(b"\n");
+                assert_eq!(acc, true);
+                assert_eq!(pt, plaintext_alice);
+
+            }
+            for _ in 0..250 {
+                let (_, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
+                let (acc, _, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
+                assert_eq!(acc, true);
+                assert_eq!(pt, plaintext_bob);
+            }
+            // Bob sends 1 to change epochs
+            //let (_, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
+            //let (acc, _, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
+            //assert_eq!(acc, true);
+            //assert_eq!(pt, plaintext_bob);
+        }
+
+
     }
 }
