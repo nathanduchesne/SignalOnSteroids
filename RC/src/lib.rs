@@ -11,7 +11,9 @@ use zeroize::Zeroize;
 use std::time::{SystemTime};
 #[macro_use]
 extern crate bytevec;
-use bytevec::{ByteEncodable, ByteDecodable};
+use bytevec::{ByteEncodable, ByteDecodable, BVSize, BVEncodeResult, BVDecodeResult};
+use std::mem::size_of;
+
 
 
 
@@ -351,6 +353,32 @@ pub fn ratchet_decrypt(state: &mut State, header: Header, ciphertext: &[u8], ass
 pub struct Ordinal {
     pub epoch: usize,
     pub index: usize
+}
+
+impl ByteEncodable for Ordinal {
+    /// Returns the total length of the byte buffer that is obtained through encode() 
+    fn get_size<Size>(&self) -> Option<Size> where Size: BVSize + ByteEncodable {
+        let usize_for_env = size_of::<usize>();
+        return Some(BVSize::from_usize(2 * usize_for_env));
+    }
+    /// Returns a byte representation of the original data object
+    fn encode<Size>(&self) -> BVEncodeResult<Vec<u8>> where Size: BVSize + ByteEncodable {
+        let mut bytes = [0u8; 2 * size_of::<usize>()];
+        bytes[0..size_of::<usize>()].clone_from_slice(&self.epoch.to_be_bytes());
+        bytes[size_of::<usize>()..2*size_of::<usize>()].copy_from_slice(&self.index.to_be_bytes());
+
+        return Ok(bytes.to_vec());
+    }
+}
+
+impl ByteDecodable for Ordinal {
+    /// Returns an instance of `Self` obtained from the deserialization of the provided byte buffer.
+    fn decode<Size>(bytes: &[u8]) -> BVDecodeResult<Self> where Size: BVSize + ByteDecodable {
+        let ordinal_epoch = usize::from_be_bytes(bytes[0..size_of::<usize>()].try_into().unwrap());
+        let ordinal_index = usize::from_be_bytes(bytes[size_of::<usize>()..2*size_of::<usize>()].try_into().unwrap());
+
+        return Ok(Ordinal { epoch: ordinal_epoch, index: ordinal_index });
+    }
 }
 
 

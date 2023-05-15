@@ -18,6 +18,7 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rc::{State, Ordinal, Header, init_all, generate_dh, dh, send, receive};
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
+use bytevec::{ByteEncodable, ByteDecodable, BVSize, BVEncodeResult, BVDecodeResult};
 
 
 #[derive(Clone)]
@@ -72,9 +73,40 @@ pub fn rrc_init_all_optimized_send(security_level: Security) -> (OptimizedSendRr
 #[derive(Hash, Eq, PartialEq, Debug, Clone, Ord, PartialOrd)]
 pub struct Message {
     pub ordinal: Ordinal,
-    //pub content: Vec<u8>
     pub content: [u8;32]
 }
+
+
+impl ByteEncodable for Message {
+    /// Returns the total length of the byte buffer that is obtained through encode() 
+    fn get_size<Size>(&self) -> Option<Size> where Size: BVSize + ByteEncodable {
+        let usize_for_env = size_of::<usize>();
+        return Some(BVSize::from_usize(32 + 2 * usize_for_env));
+    }
+    /// Returns a byte representation of the original data object
+    fn encode<Size>(&self) -> BVEncodeResult<Vec<u8>> where Size: BVSize + ByteEncodable {
+        let mut bytes = [0u8; 32 + 2 * size_of::<usize>()];
+        bytes[0..size_of::<usize>()].clone_from_slice(&self.ordinal.epoch.to_be_bytes());
+        bytes[size_of::<usize>()..2*size_of::<usize>()].copy_from_slice(&self.ordinal.index.to_be_bytes());
+        bytes[2*size_of::<usize>()..2*size_of::<usize>() + 32].copy_from_slice(&self.content);
+
+        return Ok(bytes.to_vec());
+    }
+}
+
+impl ByteDecodable for Message {
+    /// Returns an instance of `Self` obtained from the deserialization of the provided byte buffer.
+    fn decode<Size>(bytes: &[u8]) -> BVDecodeResult<Self> where Size: BVSize + ByteDecodable {
+        let ordinal_epoch = usize::from_be_bytes(bytes[0..size_of::<usize>()].try_into().unwrap());
+        let ordinal_index = usize::from_be_bytes(bytes[size_of::<usize>()..2*size_of::<usize>()].try_into().unwrap());
+        let content: [u8; 32] = bytes[2*size_of::<usize>()..2*size_of::<usize>() + 32].try_into().unwrap();
+
+        return Ok(Message{ordinal:Ordinal { epoch: ordinal_epoch, index: ordinal_index }, content: content.try_into().unwrap()});
+    }
+}
+
+
+
 
 #[derive(Clone)]
 pub struct Ciphertext {
@@ -567,15 +599,82 @@ pub fn optimized_rrc_receive(state: &mut OptimizedSendRrcState, associated_data:
 
 } 
 
-// TODO: define a function to encode set of messages into hashset of vec<u8> then call encode 
-// for each new msg, hash using sha256, keep track of xor of all msgs for ad'
-// do the same for set of ordinals
-// use these for associated data instead of hashing the whole msgs sets
+fn send_bytes(state: &mut RrcState, associated_data: &[u8; 32], plaintext: &[u8]) -> Vec<u8> {
+    // 1. Call send to obtain encrypted message as objects
+    let (num, ct, header) = rrc_send(state, associated_data, plaintext);
+    // 2. Get size of each individual element we will encode
+    // 2.1 Everything for the ciphertext object
+    let msg_ct_len = ct.ciphertext.len();
+    let ct_s_as_bytes = ct.S.encode::<u8>().unwrap();
+    let s_len = ct_s_as_bytes.len();
+    let ct_r_ord_set_as_bytes = ct.R.0.encode::<u8>().unwrap();
+    let r_ord_set_len = ct_r_ord_set_as_bytes.len();
+    let ct_len = msg_ct_len + s_len + r_ord_set_len + 32;    // + 32 bytes for r_1
+    // 2.2 Everything for the header
+    let dh_pk_len: usize = header.dh_ratchet_key.to_bytes().len();
+    let header_len: usize = dh_pk_len + 3 * size_of::<usize>();    // + 3 * usize
+    // 2.3 Ordinal takes 2 * usize_for_env
+    let ordinal_len: usize = 2 * size_of::<usize>();
+    // 3. Allocate a buffer for all of the elements
+    let metadata_len = 3 * size_of::<usize>(); // To store ciphertext, s, and r_0's lenghts in the encoded form
+    let total_len = header_len + ordinal_len + ct_len + metadata_len;
+    let mut bytes = vec![0u8; total_len];
+    // 4. Fit the elements into the buffer
+    // 4.1 The header: dh_pk || prev_chain_len || msg_nbr || epoch
+    bytes[0..32].clone_from_slice(header.dh_ratchet_key.as_bytes());
+    bytes[32..32 + size_of::<usize>()].clone_from_slice(&header.prev_chain_len.to_be_bytes());
+    bytes[32 + size_of::<usize>()..32 + 2 * size_of::<usize>()].clone_from_slice(&header.msg_nbr.to_be_bytes());
+    bytes[32 + 2 * size_of::<usize>()..header_len].clone_from_slice(&header.epoch.to_be_bytes());
+    // 4.2 The ordinal: epoch || index
+    bytes[header_len..header_len + size_of::<usize>()].clone_from_slice(&num.epoch.to_be_bytes());
+    bytes[header_len + size_of::<usize>()..header_len + ordinal_len].clone_from_slice(&num.index.to_be_bytes());
+    // 4.3 The ciphertext: ct_len || s_len || r_0_len || ct || s || r_0 || r_1
+    bytes[header_len + ordinal_len..header_len + ordinal_len + size_of::<usize>()].clone_from_slice(&msg_ct_len.to_be_bytes());
+    bytes[header_len + ordinal_len + size_of::<usize>()..header_len + ordinal_len + 2 * size_of::<usize>()].clone_from_slice(&s_len.to_be_bytes());
+    bytes[header_len + ordinal_len + 2 * size_of::<usize>()..header_len + ordinal_len + metadata_len].clone_from_slice(&r_ord_set_len.to_be_bytes());
+    bytes[header_len + ordinal_len + metadata_len..header_len + ordinal_len + metadata_len + msg_ct_len].clone_from_slice(&ct.ciphertext);
+    bytes[header_len + ordinal_len + metadata_len + msg_ct_len..header_len + ordinal_len + metadata_len + msg_ct_len + s_len].clone_from_slice(&ct_s_as_bytes);
+    bytes[header_len + ordinal_len + metadata_len + msg_ct_len + s_len..header_len + ordinal_len + metadata_len + msg_ct_len + s_len + r_ord_set_len].clone_from_slice(&ct_r_ord_set_as_bytes);
+    bytes[total_len - 32..total_len].clone_from_slice(&ct.R.1);
+
+    return bytes;
+    
+}
+
+fn receive_bytes(payload: &[u8], state: &mut RrcState, associated_data: &[u8; 32]) -> (bool, Ordinal, Vec<u8>) {
+    // 1. Decode header
+    let mut pk_bytes = [0u8; 32];
+    pk_bytes.clone_from_slice(&payload[0..32]);
+    let header = Header { dh_ratchet_key: PublicKey::from(pk_bytes), prev_chain_len: usize::from_be_bytes(payload[32..32 + size_of::<usize>()].try_into().unwrap()), msg_nbr: usize::from_be_bytes(payload[32 + size_of::<usize>()..32 + 2 * size_of::<usize>()].try_into().unwrap()), epoch: usize::from_be_bytes(payload[32 + 2 * size_of::<usize>()..32 + 3 * size_of::<usize>()].try_into().unwrap()) };
+    // 2. Decode ciphertext
+    let ct_meta_offset = 32 + 5 * size_of::<usize>();
+    let ct_len = usize::from_be_bytes(payload[ct_meta_offset..ct_meta_offset + size_of::<usize>()].try_into().unwrap());
+    let s_len = usize::from_be_bytes(payload[ct_meta_offset + size_of::<usize>()..ct_meta_offset + 2 * size_of::<usize>()].try_into().unwrap());;
+    let r_0_len = usize::from_be_bytes(payload[ct_meta_offset + 2 * size_of::<usize>()..ct_meta_offset + 3 * size_of::<usize>()].try_into().unwrap());
+
+    let ct_offset = ct_meta_offset + 3 * size_of::<usize>();
+    let s: HashSet<Message> = HashSet::decode::<u8>(&payload[ct_offset + ct_len..ct_offset + ct_len + s_len]).unwrap();
+    let r_0: HashSet<Ordinal> = HashSet::decode::<u8>(&payload[ct_offset + ct_len + s_len..ct_offset + ct_len + s_len + r_0_len]).unwrap();
+    let mut r_1 = [0u8; 32];
+    r_1.clone_from_slice(&payload[ct_offset + ct_len + s_len + r_0_len..payload.len()]);
+    let mut ct = Ciphertext { ciphertext: payload[ct_offset..ct_offset + ct_len].to_vec(), S: s, R: (r_0, r_1) };
+    return rrc_receive(state, associated_data, &mut ct, header);
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytevec::{ByteEncodable, ByteDecodable};
+
+    #[test]
+    fn send_receive_bytes_works() {
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
+        let mut associated_data = [0u8;32];
+        let plaintext = b"Wassup my dude?";
+        let bytes = send_bytes(&mut alice_state, &associated_data, plaintext);
+        let (acc, ordinal, decrypted_plaintext) = receive_bytes(&bytes, &mut bob_state, &associated_data);
+        assert_eq!(acc, true);
+        assert_eq!(plaintext.to_vec(), decrypted_plaintext);
+    }
 
     #[test]
     fn hash_set_into_byte_array_works_for_associated_data() {
