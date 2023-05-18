@@ -1,6 +1,7 @@
 use rrc::*;
 use rc::*;
 
+#[allow(dead_code)]
 pub struct RrcSendCtWrapper {
     flag: usize, 
     ordinal: Ordinal,
