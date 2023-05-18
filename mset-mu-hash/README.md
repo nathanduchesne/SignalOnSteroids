@@ -16,3 +16,5 @@ hash.end_update();
 
 hash.finalize()
 ```
+
+where Sha512 can be replaced with any 64 byte digest hash function.
