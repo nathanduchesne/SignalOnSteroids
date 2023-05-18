@@ -8,3 +8,6 @@ edition = "2021"
 [dependencies]
 rc = { path = "../rc" }
 sha2 = "0.10.6"
+
+[dev-dependencies]
+rand = "0.8.5"
