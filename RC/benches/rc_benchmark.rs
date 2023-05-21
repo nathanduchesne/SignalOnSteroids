@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion, black_box};
-use rc::{init_all, State, ratchet_encrypt, ratchet_decrypt};
+use rc::{init_all, State, receive, send};
 
 fn init_all_benchmark(c: &mut Criterion) {
     c.bench_function(
@@ -20,29 +20,29 @@ fn ratchet_encrypt_benchmark(c: &mut Criterion) {
     );
     c.bench_function(
         "Ratchet send ", 
-        |b| b.iter(|| ratchet_encrypt(&mut alice_state, &plaintext, &associated_data))
+        |b| b.iter(|| send(&mut alice_state, &associated_data, &plaintext))
     );
 }
 
-    fn ratchet_decrypt_benchmark(c: &mut Criterion) {
-        let plaintext = black_box(
-            *b"J'ai mis cerbere en enfer."
-        );
-        let mut alice_state: State;
-        let mut bob_state: State;
-        (alice_state, bob_state) = black_box(init_all());
-        let associated_data = black_box(  [0;32]);
-    
+fn ratchet_decrypt_benchmark(c: &mut Criterion) {
+    let plaintext = black_box(
+        *b"J'ai mis cerbere en enfer."
+    );
+    let mut alice_state: State;
+    let mut bob_state: State;
+    (alice_state, bob_state) = black_box(init_all());
+    let associated_data = black_box(  [0;32]);
 
-        c.bench_function(
-            "Ratchet send & receive ", 
-            |b| b.iter(|| 
-                {
-                    let (ordinal, header, ciphertext) = rc::send(&mut alice_state, &associated_data, &plaintext);
-                    rc::receive(&mut bob_state, &associated_data, header, &ciphertext);}
-            )
-        );
-    }
+
+    c.bench_function(
+        "Ratchet send & receive ", 
+        |b| b.iter(|| 
+            {
+                let (ordinal, header, ciphertext) = send(&mut alice_state, &associated_data, &plaintext);
+                receive(&mut bob_state, &associated_data, header, &ciphertext);}
+        )
+    );
+}
 
 
 // Lists all benchmark functions from the 'benches' group.
