@@ -38,7 +38,7 @@ fn ratchet_decrypt_benchmark(c: &mut Criterion) {
         "Ratchet send & receive ", 
         |b| b.iter(|| 
             {
-                let (ordinal, header, ciphertext) = send(&mut alice_state, &associated_data, &plaintext);
+                let (_, header, ciphertext) = send(&mut alice_state, &associated_data, &plaintext);
                 receive(&mut bob_state, &associated_data, header, &ciphertext);}
         )
     );
