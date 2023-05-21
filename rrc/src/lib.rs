@@ -212,7 +212,6 @@ pub fn rrc_send(state: &mut RrcState, associated_data: &[u8; 32], plaintext: &[u
     }
     let R_prime: (HashSet<Ordinal>, [u8; 32]) = (nums_prime.clone(), get_hash_msg_set(&state.R, state.hash_key_prime));
     let mut associated_data_prime: [u8; 128] = [0;128];
-    // TODO: change way of computing associated data to reduce overhead, xor messages instead of hashing for ex, idem for ordinal
     associated_data_prime[0..32].clone_from_slice(associated_data);
     associated_data_prime[32..64].clone_from_slice(&get_hash_msg_set(&state.S, [0;32]));
     associated_data_prime[64..96].clone_from_slice(&get_hash_ordinal_set(&R_prime.0));
@@ -605,9 +604,9 @@ fn send_bytes(state: &mut RrcState, associated_data: &[u8; 32], plaintext: &[u8]
     // 2. Get size of each individual element we will encode
     // 2.1 Everything for the ciphertext object
     let msg_ct_len = ct.ciphertext.len();
-    let ct_s_as_bytes = ct.S.encode::<u8>().unwrap();
+    let ct_s_as_bytes = ct.S.encode::<u32>().unwrap();
     let s_len = ct_s_as_bytes.len();
-    let ct_r_ord_set_as_bytes = ct.R.0.encode::<u8>().unwrap();
+    let ct_r_ord_set_as_bytes = ct.R.0.encode::<u32>().unwrap();
     let r_ord_set_len = ct_r_ord_set_as_bytes.len();
     let ct_len = msg_ct_len + s_len + r_ord_set_len + 32;    // + 32 bytes for r_1
     // 2.2 Everything for the header
@@ -649,12 +648,12 @@ fn receive_bytes(payload: &[u8], state: &mut RrcState, associated_data: &[u8; 32
     // 2. Decode ciphertext
     let ct_meta_offset = 32 + 5 * size_of::<usize>();
     let ct_len = usize::from_be_bytes(payload[ct_meta_offset..ct_meta_offset + size_of::<usize>()].try_into().unwrap());
-    let s_len = usize::from_be_bytes(payload[ct_meta_offset + size_of::<usize>()..ct_meta_offset + 2 * size_of::<usize>()].try_into().unwrap());;
+    let s_len = usize::from_be_bytes(payload[ct_meta_offset + size_of::<usize>()..ct_meta_offset + 2 * size_of::<usize>()].try_into().unwrap());
     let r_0_len = usize::from_be_bytes(payload[ct_meta_offset + 2 * size_of::<usize>()..ct_meta_offset + 3 * size_of::<usize>()].try_into().unwrap());
 
     let ct_offset = ct_meta_offset + 3 * size_of::<usize>();
-    let s: HashSet<Message> = HashSet::decode::<u8>(&payload[ct_offset + ct_len..ct_offset + ct_len + s_len]).unwrap();
-    let r_0: HashSet<Ordinal> = HashSet::decode::<u8>(&payload[ct_offset + ct_len + s_len..ct_offset + ct_len + s_len + r_0_len]).unwrap();
+    let s: HashSet<Message> = HashSet::decode::<u32>(&payload[ct_offset + ct_len..ct_offset + ct_len + s_len]).unwrap();
+    let r_0: HashSet<Ordinal> = HashSet::decode::<u32>(&payload[ct_offset + ct_len + s_len..ct_offset + ct_len + s_len + r_0_len]).unwrap();
     let mut r_1 = [0u8; 32];
     r_1.clone_from_slice(&payload[ct_offset + ct_len + s_len + r_0_len..payload.len()]);
     let mut ct = Ciphertext { ciphertext: payload[ct_offset..ct_offset + ct_len].to_vec(), S: s, R: (r_0, r_1) };
@@ -676,6 +675,34 @@ mod tests {
         assert_eq!(plaintext.to_vec(), decrypted_plaintext);
     }
 
+    //#[test]
+    fn memory_benchmark_for_encoded_data_to_send() {
+        let mut file = File::create("../../../Report/Plots/BenchLogs/payloadMemory_rrc_alternating.txt").expect("bla");
+
+        // Alternating. Alice and Bob take turns sending messages. 
+        // Alice sends the even-numbered messages and Bob sends the odd-numbered messages.
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::SRid);
+        let associated_data = [0u8;32];
+        let plaintext_alice = b"Hello everyone, this is an average sized text.";
+        let plaintext_bob = b"This could be an answer to a text.";
+        for i in 1..1500 {
+            let bytes = send_bytes(&mut alice_state, &associated_data, plaintext_alice);
+            file.write(i.to_string().as_bytes());
+            file.write(b" ");
+            file.write(bytes.len().to_string().as_bytes());
+            file.write_all(b"\n"); 
+            let (acc, ordinal, decrypted_plaintext) = receive_bytes(&bytes, &mut bob_state, &associated_data);
+            assert_eq!(acc, true);
+            assert_eq!(plaintext_alice.to_vec(), decrypted_plaintext);
+
+            let bytes = send_bytes(&mut bob_state, &associated_data, plaintext_bob);
+            let (acc, ordinal, decrypted_plaintext) = receive_bytes(&bytes, &mut alice_state, &associated_data);
+            assert_eq!(acc, true);
+            assert_eq!(plaintext_bob.to_vec(), decrypted_plaintext);
+            
+        }
+    }
+
     #[test]
     fn hash_set_into_byte_array_works_for_associated_data() {
         let mut test_hash_set: HashSet<Vec<u8>> = HashSet::new();
@@ -686,6 +713,21 @@ mod tests {
         assert_eq!(result_hash_set.contains(&b"tranquille le sang".to_vec()), true);
         assert_eq!(result_hash_set.contains(&b"salut".to_vec()), true);
         assert_eq!(result_hash_set.contains(&b"impossible n'est pas francais".to_vec()), false);
+    }
+
+    #[test]
+    fn encoding_hash_set_to_byte_array_works() {
+        let mut test_hash_set = HashSet::<Message>::new();
+        for i in 0..2000 {
+            test_hash_set.insert(Message { ordinal: Ordinal { epoch: i, index: i }, content: [12;32] });
+        }
+
+        let test = test_hash_set.encode::<u32>();
+        let result_hash_set: HashSet<Message> = HashSet::decode::<u32>(&test.unwrap()).unwrap();
+        for i in 0..2000 {
+            assert_eq!(result_hash_set.contains(&Message { ordinal: Ordinal { epoch: i, index: i }, content: [12;32] }), true);
+        }
+
     }
 
     #[test]
