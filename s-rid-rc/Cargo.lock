@@ -371,6 +371,7 @@ name = "rrc"
 version = "0.1.0"
 dependencies = [
  "blake2",
+ "bytevec",
  "digest 0.9.0",
  "hex-literal",
  "mset-mu-hash",
@@ -384,10 +385,12 @@ dependencies = [
 name = "s-rid-rc"
 version = "0.1.0"
 dependencies = [
+ "bytevec",
  "mset-mu-hash",
  "rc",
  "rrc",
  "sha2",
+ "x25519-dalek",
 ]
 
 [[package]]

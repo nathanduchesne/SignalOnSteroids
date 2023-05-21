@@ -10,4 +10,7 @@ rc = { path = "../rc" }
 rrc = { path = "../rrc"}
 mset-mu-hash = { path = "../mset-mu-hash"}
 sha2 = "0.10.6"
+bytevec = "0.2.0"
+x25519-dalek = "1"
+
 
