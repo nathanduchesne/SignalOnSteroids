@@ -1,7 +1,7 @@
 import subprocess
 
 def run_rust_tests():
-    directories = ["RC", "RRC", "mset-mu-hash", "unf-arc-based-on-rc", "unf-arc-based-on-rrc", "s-rid-rc"]
+    directories = ["rc", "rrc", "mset-mu-hash", "unf-arc-based-on-rc", "unf-arc-based-on-rrc", "s-rid-rc"]
     for directory in directories:
         try:
             result = subprocess.run("cd " + directory + "/src/ ;cargo test;cd ../..", shell=True, text=True)

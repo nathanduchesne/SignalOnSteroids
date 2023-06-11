@@ -19,9 +19,12 @@ block-padding = "0.3.2"
 ccm = "0.5.0"
 zeroize = "1.5.7"
 bytevec = "0.2.0"
+get-size = { version = "^0.1", features = ["derive"] }
+
 
 [dev-dependencies]
 criterion = "0.4.0"
+rand = "0.8"
 
 [[bench]]
 name = "rc_benchmark"

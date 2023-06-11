@@ -3,7 +3,7 @@ use rc::*;
 
 #[allow(dead_code)]
 pub struct RrcSendCtWrapper {
-    flag: usize, 
+    pub flag: usize, 
     ordinal: Ordinal,
     ct: Ciphertext,
     header: Header

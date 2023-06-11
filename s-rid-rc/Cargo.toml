@@ -13,4 +13,6 @@ sha2 = "0.10.6"
 bytevec = "0.2.0"
 x25519-dalek = "1"
 
+[dev-dependencies]
+criterion = "0.4.0"
 

@@ -20,10 +20,11 @@ pub struct ArcState {
     max_num: ArcOrdinal
 }
 
+#[derive(Clone)]
 pub struct AuthenticationTag {
     s: HashSet<Message>,
     r: HashSet<Message>,
-    num: ArcOrdinal
+    pub num: ArcOrdinal
 }
 
 /// These ordinals are identical to the Ordinals presented in Signal and used in the rest of the project apart from one slight difference:

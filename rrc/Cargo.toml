@@ -15,6 +15,8 @@ blake2 = "0.10.6"
 digest = "0.9.0"
 sha2 = "0.10.6"
 bytevec = "0.2.0"
+get-size = { version = "^0.1", features = ["derive"] }
+
 
 
 [dev-dependencies]

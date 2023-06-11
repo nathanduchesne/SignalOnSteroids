@@ -142,36 +142,33 @@ mod tests {
         let plaintext_alice = b"Hello I am Alice";
         let plaintext_bob = b"Hello I am Bobby";
 
-        let mut file_receive = File::create("../../../Report/Plots/BenchLogs/s_rid_rc_receive_alice_and_bob_back_and_forth.txt").expect("bla");
-        let mut file_send = File::create("../../../Report/Plots/BenchLogs/s_rid_rc_send_alice_and_bob_back_and_forth.txt").expect("bla");
+        let mut file_receive = File::create("../../../Report/Plots/BenchLogs/report/s_rid_rc_receive_opti.txt").expect("bla");
+        let mut file_send = File::create("../../../Report/Plots/BenchLogs/report/s_rid_rc_send_opti.txt").expect("bla");
 
-        // For multiple rounds
-        for _ in 0..12 {
-            // Alice sends loads of messages
-            for _ in 0..250 {
-                let send_start = SystemTime::now();
-                let (_, ct) = s_rid_rc_send(&mut alice_state, &associated_data, plaintext_alice);
-                #[allow(unused_must_use)] {
-                    file_send.write(SystemTime::now().duration_since(send_start).expect("bla").as_micros().to_string().as_bytes());
-                    file_send.write_all(b"\n");
-                    let receive_start = SystemTime::now();
-                    let (acc, _, pt) = s_rid_rc_receive(&mut bob_state, &associated_data, ct);
-                    file_receive.write(SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string().as_bytes());
-                    println!("Receive time is {}", SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string());
-                    file_receive.write_all(b"\n");
+            // For multiple rounds
+            for _ in 0..10 {
+                // Alice sends loads of messages
+                for _ in 0..100 {
+                    let send_start = SystemTime::now();
+                    let (_, ct) = s_rid_rc_send(&mut alice_state, &associated_data, plaintext_alice);
+                    #[allow(unused_must_use)] {
+                        file_send.write(SystemTime::now().duration_since(send_start).expect("bla").as_micros().to_string().as_bytes());
+                        file_send.write_all(b"\n");
+                        let receive_start = SystemTime::now();
+                        let (acc, _, pt) = s_rid_rc_receive(&mut bob_state, &associated_data, ct);
+                        file_receive.write(SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string().as_bytes());
+                        file_receive.write_all(b"\n");
 
+                        assert_eq!(acc, true);
+                    assert_eq!(pt, plaintext_alice);
+                    }
+                }
+                for _ in 0..100 {
+                    let (_, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
+                    let (acc, _, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
                     assert_eq!(acc, true);
-                assert_eq!(pt, plaintext_alice);
+                    assert_eq!(pt, plaintext_bob);
                 }
             }
-            for _ in 0..250 {
-                let (_, ct2) = s_rid_rc_send(&mut bob_state, &associated_data, plaintext_bob);
-                let (acc, _, pt) = s_rid_rc_receive(&mut alice_state, &associated_data, ct2);
-                assert_eq!(acc, true);
-                assert_eq!(pt, plaintext_bob);
-            }
-        }
-
-
     }
 }

@@ -47,5 +47,6 @@ fn ratchet_decrypt_benchmark(c: &mut Criterion) {
 
 // Lists all benchmark functions from the 'benches' group.
 criterion_group!(benches, init_all_benchmark, ratchet_encrypt_benchmark, ratchet_decrypt_benchmark);
+//criterion_group!(benches, send_receive_measures);
 // Acts as a main function and runs all benchamrks in 'benches' group
 criterion_main!(benches);

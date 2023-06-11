@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use std::{fs::File, time::SystemTime, io::Write};
     use rand::Rng;
     use crate::protocol::{rc_arc_init, rc_arc_receive, rc_arc_send, rc_arc_auth_receive, rc_arc_auth_send};
 
@@ -76,5 +77,38 @@ mod tests {
         let mut at = rc_arc_auth_send(&mut bob_state);
         let (acc, _) = rc_arc_auth_receive(&mut alice_state, &mut at);
         assert_eq!(acc, true); // ---> Alice received nothing abnormal from Bob
+    }
+
+    #[allow(dead_code)]
+    //#[test]
+    fn receive_send_bench() {
+        let mut file_runtime_send = File::create("../../../Report/Plots/BenchLogs/report/unf_arc_rrc_send.txt").expect("bla");
+        let mut file_runtime_recv = File::create("../../../Report/Plots/BenchLogs/report/unf_arc_rrc_recv.txt").expect("bla");
+        let plaintext = *b"J'ai mis cerbere en enfer.";
+        let (mut alice_state, mut bob_state) = rc_arc_init();
+    
+        let associated_data = [0u8;32];
+    
+        for _ in 0..2000 {
+                let start = SystemTime::now();
+                let mut wrapper = rc_arc_send(&mut alice_state, &associated_data, &plaintext);
+                file_runtime_send.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file_runtime_send.write_all(b"\n").unwrap();
+    
+                let start = SystemTime::now();
+                let (_, _, _) = rc_arc_receive(&mut bob_state, &associated_data, &mut wrapper);
+                file_runtime_recv.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file_runtime_recv.write_all(b"\n").unwrap();
+                let mut wrapper = rc_arc_send(&mut bob_state, &associated_data, &plaintext);
+                let (acc, _, _) = rc_arc_receive(&mut alice_state, &associated_data, &mut wrapper);
+                assert_eq!(acc, true);
+        }
+        let start = SystemTime::now();
+        let mut at = rc_arc_auth_send(&mut alice_state);
+        println!("RRC Auth send after 10k messages takes {:?} microseconds", SystemTime::now().duration_since(start).unwrap().as_micros());
+        let start = SystemTime::now();
+        let (acc, _,) = rc_arc_auth_receive(&mut bob_state, &mut at);
+        println!("RRC Auth receive after 10k messages takes {:?} microseconds", SystemTime::now().duration_since(start).unwrap().as_micros());
+        assert_eq!(acc, true);
     }
 }

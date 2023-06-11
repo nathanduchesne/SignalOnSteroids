@@ -6,6 +6,7 @@ mod tests {
     use rc::{Ordinal, Header};
     use sha2::Sha512;
 
+
     use crate::{protocol::{rrc_init_all, rrc_send, rrc_receive, send_bytes, receive_bytes, Message, Security, Ciphertext, incremental_hash_fct_of_whole_set, incremental_hash_sets_are_equal, update_incremental_hash_set, get_hash_ordinal_set, get_hash_msg_set}, optimized_rrc_send, optimized_rrc_receive, rrc_init_all_optimized_send};
 
     #[test]
@@ -613,5 +614,185 @@ mod tests {
             }
         }
     }
+
+    //#[test]
+    #[allow(dead_code)]
+    fn bench_rrc_send() {
+        let mut file_send = File::create("../../../Report/Plots/BenchLogs/pres/rrc_send.txt").expect("bla");
+        let mut file_recv = File::create("../../../Report/Plots/BenchLogs/pres/rrc_recv.txt").expect("bla");
+
+        // Alternating. Alice and Bob take turns sending messages. 
+        // Alice sends the even-numbered messages and Bob sends the odd-numbered messages.
+        let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
+        let associated_data = [0u8;32];
+        let plaintext_alice = b"Hello everyone, this is an average sized text.";
+        let plaintext_bob = b"This could be an answer to a text.";
+        for j in 0..5000 {
+            if j % 500 == 0 {
+                println!("{:?} / 5000", j);
+            }
+            let start = SystemTime::now();
+            let (_, mut ct, header) = rrc_send(&mut alice_state, &associated_data, plaintext_alice);
+            #[allow(unused_must_use)] {
+                file_send.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file_send.write_all(b"\n").unwrap();
+            }
+            let start = SystemTime::now();
+            let (acc, _, decrypted_plaintext) = rrc_receive(&mut bob_state, &associated_data, &mut ct, header);
+            #[allow(unused_must_use)] {
+                file_recv.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file_recv.write_all(b"\n").unwrap();
+            }
+            assert_eq!(acc, true);
+            assert_eq!(plaintext_alice.to_vec(), decrypted_plaintext);
+
+            let (_, mut ct, header) = rrc_send(&mut bob_state, &associated_data, plaintext_bob);
+            let (acc, _, decrypted_plaintext) = rrc_receive(&mut alice_state, &associated_data, &mut ct, header);
+            assert_eq!(acc, true);
+            assert_eq!(plaintext_bob.to_vec(), decrypted_plaintext);
+        }
+    }
+
+    //#[test]
+    #[allow(dead_code)]
+    fn bench_rrc_receive() {
+        let mut file = File::create("../../../Report/Plots/BenchLogs/report/rrc_receive.txt").expect("bla");
+
+        for i in 0..3 {
+
+            println!("Benchmark receive RRC: starting {:?} of 4", i);
+
+            // Alternating. Alice and Bob take turns sending messages. 
+            // Alice sends the even-numbered messages and Bob sends the odd-numbered messages.
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
+            let associated_data = [0u8;32];
+            let plaintext_alice = b"Hello everyone, this is an average sized text.";
+            let plaintext_bob = b"This could be an answer to a text.";
+            for j in 0..5000 {
+                if j % 500 == 0 {
+                    println!("{:?} / 5000", j);
+                }
+                let (_, mut ct, header) = rrc_send(&mut alice_state, &associated_data, plaintext_alice);
+                
+                let start = SystemTime::now();
+                let (acc, _, decrypted_plaintext) = rrc_receive(&mut bob_state, &associated_data, &mut ct, header);
+                file.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file.write_all(b"\n").unwrap();
+                
+                assert_eq!(acc, true);
+                assert_eq!(plaintext_alice.to_vec(), decrypted_plaintext);
+
+                let (_, mut ct, header) = rrc_send(&mut bob_state, &associated_data, plaintext_bob);
+                let (acc, _, decrypted_plaintext) = rrc_receive(&mut alice_state, &associated_data, &mut ct, header);
+                assert_eq!(acc, true);
+                assert_eq!(plaintext_bob.to_vec(), decrypted_plaintext);
+            }
+            file.write_all(b"=\n").unwrap();
+        }
+    }
+
+    //#[test]
+    #[allow(dead_code)]
+    fn benchmark_rcv_r_rid() { 
+ 
+        let mut file = File::create("../../../Report/Plots/BenchLogs/report/rrc_receive_r_rid.txt").expect("bla");
+        let plaintext = b"J'ai mis cerbere en enfer.";
+
+        for iter in 0..3 {
+            println!("Starting epoch {:?} of rcv with r-RID", iter);
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
+            let associated_data = [0;32]; 
+            for msg_nbr in 0..5000 {
+                if msg_nbr % 500 == 0 {
+                    println!("Done {:?} / 3000", msg_nbr);
+                }
+                let (_, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, plaintext);
+                let start = SystemTime::now();
+                let _ = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
+                file.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file.write_all(b"\n").unwrap(); 
+                let (_, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, plaintext);        
+                let _ = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext, header);
+            }
+            file.write_all(b"=\n").unwrap(); 
+        }
+
+    }
+    //#[test]
+    #[allow(dead_code)]
+    fn benchmark_rcv_s_rid() {
+        let mut file = File::create("../../../Report/Plots/BenchLogs/report/rrc_receive_s_rid.txt").expect("bla");
+        let plaintext = b"J'ai mis cerbere en enfer.";
+
+        for iter in 0..3 {
+            println!("Starting epoch {:?} of rcv with s-RID", iter);
+            let (mut alice_state, mut bob_state) = rrc_init_all(Security::SRid);
+            let associated_data = [0;32]; 
+            for msg_nbr in 0..5000 {
+                if msg_nbr % 500 == 0 {
+                    println!("Done {:?} / 3000", msg_nbr);
+                }
+                let (_, mut ciphertext, header) = rrc_send(&mut alice_state, &associated_data, plaintext);
+                let start = SystemTime::now();
+                let _ = rrc_receive(&mut bob_state, &associated_data, &mut ciphertext, header);
+                file.write(SystemTime::now().duration_since(start).expect("bla").as_micros().to_string().as_bytes()).unwrap();
+                file.write_all(b"\n").unwrap(); 
+                let (_, mut ciphertext, header) = rrc_send(&mut bob_state, &associated_data, plaintext);        
+                let _ = rrc_receive(&mut alice_state, &associated_data, &mut ciphertext, header);
+            }
+            file.write_all(b"=\n").unwrap(); 
+        }
+    }
+
+    #[allow(dead_code)]
+    /// Benchmark used for evaluating and measuring runtimes for further graphical analysis
+    /// Not run by default due to high overhead compared to the unit tests running time.
+    //#[test]
+    fn benchmark_opti_receive_and_send_times() {
+        let (mut alice_state, mut bob_state) = rrc_init_all_optimized_send(Security::SRid);
+        let associated_data: [u8; 32] = [0;32];
+
+        let plaintext_alice = b"Hello I am Alice";
+        let plaintext_bob = b"Hello I am Bobby";
+
+        let mut file_receive = File::create("../../../Report/Plots/BenchLogs/report/rrc_receive_opti.txt").expect("bla");
+        let mut file_send = File::create("../../../Report/Plots/BenchLogs/report/rrc_send_opti.txt").expect("bla");
+
+        for iter in 0..3 {
+            println!("In s-rid opti, round {:?} / 3", iter + 1);
+            // For multiple rounds
+            for _ in 0..5 {
+                // Alice sends loads of messages
+                for _ in 0..1500 {
+                    let send_start = SystemTime::now();
+                    let (_, mut ct, header) = optimized_rrc_send(&mut alice_state, &associated_data, plaintext_alice);
+                    #[allow(unused_must_use)] {
+                        file_send.write(SystemTime::now().duration_since(send_start).expect("bla").as_micros().to_string().as_bytes());
+                        file_send.write_all(b"\n");
+                        let receive_start = SystemTime::now();
+                        let (acc, _, pt) = optimized_rrc_receive(&mut bob_state, &associated_data, &mut ct, header);
+                        file_receive.write(SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string().as_bytes());
+                        //println!("Receive time is {}", SystemTime::now().duration_since(receive_start).expect("bla").as_micros().to_string());
+                        file_receive.write_all(b"\n");
+
+                        assert_eq!(acc, true);
+                    assert_eq!(pt, plaintext_alice);
+                    }
+                }
+                for _ in 0..1500 {
+                    let (_, mut ct2, header2) = optimized_rrc_send(&mut bob_state, &associated_data, plaintext_bob);
+                    let (acc, _, pt) = optimized_rrc_receive(&mut alice_state, &associated_data, &mut ct2, header2);
+                    assert_eq!(acc, true);
+                    assert_eq!(pt, plaintext_bob);
+                }
+            }
+            #[allow(unused_must_use)] {
+                file_receive.write_all(b"=\n");
+                file_send.write_all(b"=\n");
+            }
+        }
+    
+    }
+
 }
 
