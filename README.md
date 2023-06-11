@@ -7,6 +7,20 @@ The Signal protocol is used as the de facto standard in secure messaging. Howeve
 These solutions are often only theoretical and therefore their potential impact on the efficiency of real systems is hard to quantify. The goal of the project is to implement the improvements mentioned above and benchmark them.
 
 ## Repository structure
+<pre>
+├── mset-mu-hash _______________
+├── rc                         |
+├── rrc                        --\
+├── s-rid-rc                   --/ Crates containing all the project implementations and optimizations.
+├── unf-arc-based-on-rc        |
+├── unf-arc-based-on-rrc ______|
+├── execute_tests.py           --> Script used to run all project tests in one command.
+
+</pre>
 
 ## Running tests and benchmarks
+To run **all the test suites at once**, run ```python execute_tests.py```.
 
+To run tests **of a single crate individually**, navigate to that crate, then run ```cargo test``` -> ex. ```cd rc; cargo test```
+
+To run the benchmarks of a crate, navigate to that crate and run ```cargo bench```.
