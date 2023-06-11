@@ -1,5 +1,6 @@
 This crate implements the baseline RRC scheme found in “On Active Attack Detection in Messaging with Immediate Decryption”, Khashayar Barooti, Daniel Collins, Simone Colombo, Loïs Huguenin-Dumittan, and Serge Vaudenay. 
-It can be used in the following manner:
+
+It can be used in the following manner 💻:
 ```
 let (mut alice_state, mut bob_state) = rrc_init_all(Security::RRidAndSRid);
 let associated_data = [0u8;32];
@@ -20,3 +21,5 @@ let (acc, _, decrypted_plaintext) = receive_bytes(&bytes, &mut bob_state, &assoc
 assert_eq!(acc, true);
 assert_eq!(plaintext.to_vec(), decrypted_plaintext);
 ```
+
+In both cases, if **acc == false**, this means something went wrong in the protocol, meaning either decryption failed---if associated data isn't the same on both user sides---or a user attempted to tamper with a message and the MAC is incorrect.
