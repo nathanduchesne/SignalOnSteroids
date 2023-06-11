@@ -18,6 +18,27 @@ These solutions are often only theoretical and therefore their potential impact 
 
 </pre>
 
+## Installation
+To run the project, start by installing Rust on your computer.  
+```curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh```  
+as indicated on the Rust webpage https://www.rust-lang.org/tools/install.
+
+## Testing the installation
+To verify that Rust is up and running on your machine, you can try building one of the project crates by navigating to one of the crate directories---e.g rc, rrc, mset-mu-hash, s-rid-rc, unf-arc-based-on-rrc, unf-arc-based-on-rc--- and run 
+```cargo build```. This should build the cargo crate you are currently in.
+
+## Executing the programs
+Since most of the code is contained in the form of crates---or libraries---, it does not have an entry point such as a main function or program. To execute code from a given crate, you must run the following.
+
+```cargo new <name_of_test_file>```
+
+This will create a folder containing a src/main.rs file, and a ```Cargo.toml``` file.
+In the ```Cargo.toml``` file, under ```[dependencies]```, add ```<crate_name> = { path = "<path_to_crate_directory>" }```
+ex. ```rc = {path = "../rc"}```.
+
+Once you have added this, you can use the crate's API---which can be found in the crate's lib.rs file---to write your own program. Example programs can be found in the **README.md** file which is present in every crate. When using a library function in your main program, "import" it at the top of the main file, using:
+```use <crate_name>::{api_fct_1, api_fct_2, ...};```
+
 ## Running tests and benchmarks
 To run **all the test suites at once**, run ```python execute_tests.py```.
 
